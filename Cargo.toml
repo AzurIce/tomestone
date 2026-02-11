@@ -1,0 +1,10 @@
+[package]
+name = "ff-tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ironworks = { version = "0.4.1", features = ["sqpack", "excel", "ffxiv"] }
+
+[profile.dev]
+overflow-checks = false

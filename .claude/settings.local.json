@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__crates__get_crate_info",
+      "WebSearch",
+      "mcp__crates__search_crates",
+      "mcp__crates__get_crate_versions",
+      "mcp__crates__get_crate_dependencies",
+      "mcp__crates__get_crate_documentation",
+      "mcp__fetch__fetch_markdown",
+      "Bash(gh search:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh repo view:*)",
+      "Bash(gh api:*)",
+      "Bash(python:*)",
+      "Bash(findstr:*)",
+      "WebFetch(domain:docs.xiv.zone)",
+      "Bash(cargo init:*)",
+      "Bash(rustc:*)",
+      "Bash(cargo --version:*)",
+      "Bash(cargo build:*)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(cargo doc:*)",
+      "WebFetch(domain:)",
+      "Bash(dir:*)",
+      "Bash(cargo run:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\n初始化项目: SqPack 数据读取验证通过\n\n- 使用 ironworks 库读取 FF14 游戏数据\n- 验证 Excel 表 \\(Item/Stain/EquipSlotCategory\\) 可访问\n- 验证模型 \\(.mdl\\) 和纹理 \\(.tex\\) 文件可读取\n- 添加技术调研文档 \\(docs/\\)\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)",
+      "WebFetch(domain:v2.xivapi.com)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

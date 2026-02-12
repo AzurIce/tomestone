@@ -89,11 +89,10 @@ impl eframe::App for App {
 
                 ui.separator();
 
-                let filtered: Vec<(usize, String)> = self.filtered_items()
+                let filtered: Vec<(usize, String)> = self
+                    .filtered_items()
                     .into_iter()
-                    .map(|(idx, item)| {
-                        (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name))
-                    })
+                    .map(|(idx, item)| (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name)))
                     .collect();
                 ui.label(format!("{} 件", filtered.len()));
 
@@ -181,7 +180,42 @@ fn main() {
     eframe::run_native(
         "ff-tools",
         options,
-        Box::new(|_cc| Ok(Box::new(App::new(items)))),
+        Box::new(|cc| {
+            setup_fonts(cc);
+            Ok(Box::new(App::new(items)))
+        }),
     )
     .unwrap();
+}
+
+fn setup_fonts(cc: &eframe::CreationContext) {
+    // Support Chinese
+    let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "Harmony OS Sans".to_string(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+            "../assets/HarmonyOS_Sans_SC_Regular.ttf"
+        ))),
+    );
+
+    // Put my font first (highest priority):
+    // fonts
+    //     .families
+    //     .get_mut(&FontFamily::Proportional)
+    //     .unwrap()
+    //     .insert(0, "Harmony OS Sans".to_owned());
+
+    // Put my font as last fallback:
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Proportional)
+        .unwrap()
+        .push("Harmony OS Sans".to_owned());
+    fonts
+        .families
+        .get_mut(&egui::FontFamily::Monospace)
+        .unwrap()
+        .push("Harmony OS Sans".to_owned());
+    cc.egui_ctx.set_fonts(fonts);
 }

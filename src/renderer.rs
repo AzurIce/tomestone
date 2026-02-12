@@ -1,6 +1,7 @@
 use egui_wgpu::wgpu;
 
 use crate::mdl_loader::{BoundingBox, MeshData, Vertex};
+use crate::tex_loader::TextureData;
 
 /// 相机参数
 pub struct Camera {
@@ -65,6 +66,8 @@ pub struct ModelRenderer {
     pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    gpu_sampler: wgpu::Sampler,
     color_texture: Option<(wgpu::Texture, wgpu::TextureView)>,
     depth_texture: Option<(wgpu::Texture, wgpu::TextureView)>,
     target_size: [u32; 2],
@@ -75,11 +78,15 @@ struct GpuMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_count: u32,
+    texture_bind_group: wgpu::BindGroup,
 }
 
 const SHADER_SRC: &str = r#"
 struct Uniforms { view_proj: mat4x4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
+
+@group(1) @binding(0) var t_diffuse: texture_2d<f32>;
+@group(1) @binding(1) var s_diffuse: sampler;
 
 struct VsIn {
     @location(0) position: vec3<f32>,
@@ -91,6 +98,7 @@ struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 @vertex fn vs_main(v: VsIn) -> VsOut {
@@ -98,6 +106,7 @@ struct VsOut {
     out.clip = u.view_proj * vec4<f32>(v.position, 1.0);
     out.normal = v.normal;
     out.color = v.color;
+    out.uv = v.uv;
     return out;
 }
 
@@ -106,8 +115,9 @@ struct VsOut {
     let n = normalize(f.normal);
     let ndl = max(dot(n, light_dir), 0.0);
     let ambient = 0.15;
-    let col = f.color.xyz * (ambient + ndl * (1.0 - ambient));
-    return vec4<f32>(col, 1.0);
+    let tex_color = textureSample(t_diffuse, s_diffuse, f.uv);
+    let col = tex_color.xyz * (ambient + ndl * (1.0 - ambient));
+    return vec4<f32>(col, tex_color.a);
 }
 "#;
 
@@ -125,8 +135,8 @@ impl ModelRenderer {
             mapped_at_creation: false,
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
+        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("uniform_bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX,
@@ -141,16 +151,48 @@ impl ModelRenderer {
 
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &bind_group_layout,
+            layout: &uniform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform_buffer.as_entire_binding(),
             }],
         });
 
+        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("texture_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let gpu_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("diffuse_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&uniform_bind_group_layout, &texture_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -203,6 +245,8 @@ impl ModelRenderer {
             pipeline,
             uniform_buffer,
             uniform_bind_group,
+            texture_bind_group_layout,
+            gpu_sampler,
             color_texture: None,
             depth_texture: None,
             target_size: [0, 0],
@@ -210,9 +254,62 @@ impl ModelRenderer {
         }
     }
 
-    pub fn set_mesh_data(&mut self, device: &wgpu::Device, meshes: &[MeshData]) {
+    fn create_texture_bind_group(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> wgpu::BindGroup {
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("diffuse_tex"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            size,
+        );
+        let view = texture.create_view(&Default::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("texture_bg"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.gpu_sampler),
+                },
+            ],
+        })
+    }
+
+    pub fn set_mesh_data(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, meshes: &[MeshData], textures: &[TextureData]) {
         self.meshes.clear();
-        for mesh in meshes {
+        // 1x1 白色回退
+        let white = TextureData { rgba: vec![255, 255, 255, 255], width: 1, height: 1 };
+        for (i, mesh) in meshes.iter().enumerate() {
             if mesh.vertices.is_empty() || mesh.indices.is_empty() {
                 continue;
             }
@@ -227,10 +324,13 @@ impl ModelRenderer {
                 contents: bytemuck::cast_slice(&mesh.indices),
                 usage: wgpu::BufferUsages::INDEX,
             });
+            let tex = textures.get(i).unwrap_or(&white);
+            let texture_bind_group = self.create_texture_bind_group(device, queue, &tex.rgba, tex.width, tex.height);
             self.meshes.push(GpuMesh {
                 vertex_buffer,
                 index_buffer,
                 index_count: mesh.indices.len() as u32,
+                texture_bind_group,
             });
         }
     }
@@ -314,6 +414,7 @@ impl ModelRenderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             for mesh in &self.meshes {
+                pass.set_bind_group(1, &mesh.texture_bind_group, &[]);
                 pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
                 pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
                 pass.draw_indexed(0..mesh.index_count, 0, 0..1);

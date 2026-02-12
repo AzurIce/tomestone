@@ -1,10 +1,17 @@
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use ironworks::Ironworks;
 
+/// MDL 解析结果
+pub struct MdlResult {
+    pub meshes: Vec<MeshData>,
+    pub material_names: Vec<String>,
+}
+
 /// 从 MDL 文件提取的渲染用网格数据
 pub struct MeshData {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u16>,
+    pub material_index: u16,
 }
 
 /// GPU 顶点格式
@@ -60,7 +67,7 @@ pub fn compute_bounding_box(meshes: &[MeshData]) -> BoundingBox {
 }
 
 /// 从 ironworks 加载 MDL 并提取网格数据 (支持 v5/v6 Dawntrail 格式)
-pub fn load_mdl(ironworks: &Ironworks, path: &str) -> Result<Vec<MeshData>, String> {
+pub fn load_mdl(ironworks: &Ironworks, path: &str) -> Result<MdlResult, String> {
     let data: Vec<u8> = ironworks.file(path)
         .map_err(|e| format!("读取文件失败: {e}"))?;
     parse_mdl(&data)
@@ -134,6 +141,7 @@ struct MdlMesh {
     vertex_count: u16,
     index_count: u32,
     start_index: u32,
+    material_index: u16,
     vertex_buffer_offset: [u32; 3],
     vertex_buffer_stride: [u8; 3],
 }
@@ -145,7 +153,7 @@ struct MdlLod {
     index_data_offset: u32,
 }
 
-fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
+fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
     let mut c = Cursor::new(data);
 
     // ---- File Header (68 bytes) ----
@@ -164,7 +172,22 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
     let _string_count = read_u16(&mut c)?;
     skip(&mut c, 2)?; // padding
     let string_size = read_u32(&mut c)?;
-    skip(&mut c, string_size as i64)?;
+    let string_start = c.position();
+    let string_end = string_start + string_size as u64;
+    // Parse null-terminated strings, filter for .mtrl
+    let mut material_names = Vec::new();
+    {
+        let string_block = &data[string_start as usize..string_end as usize];
+        for s in string_block.split(|&b| b == 0) {
+            if s.is_empty() { continue; }
+            if let Ok(name) = std::str::from_utf8(s) {
+                if name.ends_with(".mtrl") {
+                    material_names.push(name.to_string());
+                }
+            }
+        }
+    }
+    c.seek(SeekFrom::Start(string_end)).map_err(|e| format!("seek past strings: {e}"))?;
 
     // ---- Model Header ----
     let _radius = read_f32(&mut c)?;
@@ -216,7 +239,7 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
         let vertex_count = read_u16(&mut c)?;
         skip(&mut c, 2)?; // padding
         let index_count = read_u32(&mut c)?;
-        let _material_index = read_u16(&mut c)?;
+        let material_index = read_u16(&mut c)?;
         let _submesh_index = read_u16(&mut c)?;
         let _submesh_count = read_u16(&mut c)?;
         let _bone_table_index = read_u16(&mut c)?;
@@ -229,7 +252,7 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
         let vbs2 = read_u8(&mut c)?;
         let _stream_count = read_u8(&mut c)?;
         meshes.push(MdlMesh {
-            vertex_count, index_count, start_index,
+            vertex_count, index_count, start_index, material_index,
             vertex_buffer_offset: [vbo0, vbo1, vbo2],
             vertex_buffer_stride: [vbs0, vbs1, vbs2],
         });
@@ -314,10 +337,10 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
             indices.push(read_u16(&mut c)?);
         }
 
-        result.push(MeshData { vertices, indices });
+        result.push(MeshData { vertices, indices, material_index: mesh.material_index });
     }
 
-    Ok(result)
+    Ok(MdlResult { meshes: result, material_names })
 }
 
 // ---- Half-float 读取 ----
@@ -365,11 +388,11 @@ fn half_to_f32(h: u16) -> f32 {
 }
 
 /// 尝试多个路径加载 MDL，返回第一个成功的结果
-pub fn load_mdl_with_fallback(ironworks: &Ironworks, paths: &[String]) -> Result<Vec<MeshData>, String> {
+pub fn load_mdl_with_fallback(ironworks: &Ironworks, paths: &[String]) -> Result<MdlResult, String> {
     let mut last_err = String::from("无候选路径");
     for path in paths {
         match load_mdl(ironworks, path) {
-            Ok(meshes) if !meshes.is_empty() => return Ok(meshes),
+            Ok(result) if !result.meshes.is_empty() => return Ok(result),
             Ok(_) => { last_err = format!("{}: 网格为空", path); }
             Err(e) => { last_err = format!("{}: {}", path, e); }
         }

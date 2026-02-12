@@ -1,6 +1,7 @@
 mod game_data;
 mod mdl_loader;
 mod renderer;
+mod tex_loader;
 
 use std::path::Path;
 
@@ -166,9 +167,22 @@ impl eframe::App for App {
                         self.loaded_model_idx = Some(idx);
                         let paths = item.model_paths();
                         match mdl_loader::load_mdl_with_fallback(self.game.ironworks(), &paths) {
-                            Ok(meshes) if !meshes.is_empty() => {
-                                let bbox = mdl_loader::compute_bounding_box(&meshes);
-                                self.model_renderer.set_mesh_data(&self.render_state.device, &meshes);
+                            Ok(result) if !result.meshes.is_empty() => {
+                                let bbox = mdl_loader::compute_bounding_box(&result.meshes);
+                                println!("加载纹理: {} 个材质, {} 个网格", result.material_names.len(), result.meshes.len());
+                                let textures = tex_loader::load_mesh_textures(
+                                    self.game.ironworks(),
+                                    &result.material_names,
+                                    &result.meshes,
+                                    item.set_id,
+                                    item.variant_id,
+                                );
+                                self.model_renderer.set_mesh_data(
+                                    &self.render_state.device,
+                                    &self.render_state.queue,
+                                    &result.meshes,
+                                    &textures,
+                                );
                                 self.camera.focus_on(&bbox);
                                 self.last_bbox = Some(bbox);
                                 if let Some(tid) = self.model_texture_id.take() {
@@ -176,7 +190,12 @@ impl eframe::App for App {
                                 }
                             }
                             _ => {
-                                self.model_renderer.set_mesh_data(&self.render_state.device, &[]);
+                                self.model_renderer.set_mesh_data(
+                                    &self.render_state.device,
+                                    &self.render_state.queue,
+                                    &[],
+                                    &[],
+                                );
                                 self.last_bbox = None;
                             }
                         }

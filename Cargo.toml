@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ironworks = { version = "0.4.1", features = ["sqpack", "excel", "ffxiv", "mdl"] }
+ironworks = { version = "0.4.1", features = ["sqpack", "excel", "ffxiv", "mdl", "mtrl", "tex"] }
 eframe = { version = "0.33", features = ["wgpu"] }
 egui-wgpu = "0.33"
 wgpu = "27"
 bytemuck = { version = "1", features = ["derive"] }
+texpresso = "2"
 
 [profile.dev]
 overflow-checks = false

@@ -326,11 +326,12 @@ fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> [[f32; 4]; 4] {
 fn perspective(fov_y: f32, aspect: f32, near: f32, far: f32) -> [[f32; 4]; 4] {
     let f = 1.0 / (fov_y / 2.0).tan();
     let nf = 1.0 / (near - far);
+    // wgpu 深度范围 [0, 1]
     [
         [f / aspect, 0.0, 0.0, 0.0],
         [0.0, f, 0.0, 0.0],
-        [0.0, 0.0, (far + near) * nf, -1.0],
-        [0.0, 0.0, 2.0 * far * near * nf, 0.0],
+        [0.0, 0.0, far * nf, -1.0],
+        [0.0, 0.0, near * far * nf, 0.0],
     ]
 }
 

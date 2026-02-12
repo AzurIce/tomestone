@@ -66,15 +66,19 @@ fn read_vertex_declarations(c: &mut Cursor<&[u8]>, count: u16) -> Result<Vec<Vec
     let mut decls = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let mut elements = Vec::new();
-        for _ in 0..VERTEX_ELEMENT_SLOTS {
+        for slot in 0..VERTEX_ELEMENT_SLOTS {
             let stream = read_u8(c)?;
             let offset = read_u8(c)?;
             let format = read_u8(c)?;
             let usage = read_u8(c)?;
             skip(c, 4)?; // usage_index + padding
-            if stream != 0xFF {
-                elements.push(VertexElement { stream, offset, format, usage });
+            if stream == 0xFF {
+                // 0xFF 标记后的 slot 全部跳过
+                let remaining = VERTEX_ELEMENT_SLOTS - slot - 1;
+                skip(c, remaining as i64 * 8)?;
+                break;
             }
+            elements.push(VertexElement { stream, offset, format, usage });
         }
         decls.push(elements);
     }
@@ -102,7 +106,7 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
     let mut c = Cursor::new(data);
 
     // ---- File Header (68 bytes) ----
-    let version = read_u32(&mut c)?;
+    let _version = read_u32(&mut c)?;
     let _stack_size = read_u32(&mut c)?;
     let _runtime_size = read_u32(&mut c)?;
     let vertex_decl_count = read_u16(&mut c)?;
@@ -122,22 +126,22 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
     // ---- Model Header ----
     let _radius = read_f32(&mut c)?;
     let mesh_count = read_u16(&mut c)?;
-    let attribute_count = read_u16(&mut c)?;
-    let submesh_count = read_u16(&mut c)?;
+    let _attribute_count = read_u16(&mut c)?;
+    let _submesh_count = read_u16(&mut c)?;
     let _material_count2 = read_u16(&mut c)?;
-    let bone_count = read_u16(&mut c)?;
-    let bone_table_count = read_u16(&mut c)?;
-    let shape_count = read_u16(&mut c)?;
-    let shape_mesh_count = read_u16(&mut c)?;
-    let shape_value_count = read_u16(&mut c)?;
+    let _bone_count = read_u16(&mut c)?;
+    let _bone_table_count = read_u16(&mut c)?;
+    let _shape_count = read_u16(&mut c)?;
+    let _shape_mesh_count = read_u16(&mut c)?;
+    let _shape_value_count = read_u16(&mut c)?;
     let _lod_count = read_u8(&mut c)?;
     let _flags1 = read_u8(&mut c)?;
     let element_id_count = read_u16(&mut c)?;
-    let terrain_shadow_mesh_count = read_u8(&mut c)?;
+    let _terrain_shadow_mesh_count = read_u8(&mut c)?;
     let flags2 = read_u8(&mut c)?;
     skip(&mut c, 4 + 4)?; // clip distances
     let _unknown4 = read_u16(&mut c)?;
-    let terrain_shadow_submesh_count = read_u16(&mut c)?;
+    let _terrain_shadow_submesh_count = read_u16(&mut c)?;
     skip(&mut c, 1 + 1 + 1 + 1 + 2 + 2 + 2 + 6)?; // unknowns + padding
 
     // ---- Element IDs ----
@@ -188,59 +192,8 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
         });
     }
 
-    // ---- 跳过剩余元数据 (不需要解析，直接跳到数据区) ----
-    // attribute_name_offsets
-    skip(&mut c, attribute_count as i64 * 4)?;
-    // terrain_shadow_meshes (16 bytes each)
-    skip(&mut c, terrain_shadow_mesh_count as i64 * 16)?;
-    // submeshes (16 bytes each)
-    skip(&mut c, submesh_count as i64 * 16)?;
-    // terrain_shadow_submeshes (12 bytes each)
-    skip(&mut c, terrain_shadow_submesh_count as i64 * 12)?;
-    // material_name_offsets + bone_name_offsets
-    skip(&mut c, (_material_count2 as i64 + bone_count as i64) * 4)?;
-
-    // ---- Bone Tables (v5 vs v6 差异!) ----
-    let is_v6 = version >= 0x0100_0006;
-    if is_v6 {
-        // BoneTableV2: 2 padding + u16 count + count*u16 + optional 2 align
-        for _ in 0..bone_table_count {
-            skip(&mut c, 2)?; // padding
-            let bone_count_bt = read_u16(&mut c)?;
-            skip(&mut c, bone_count_bt as i64 * 2)?;
-            if bone_count_bt % 2 == 0 {
-                skip(&mut c, 2)?; // alignment padding
-            }
-        }
-    } else {
-        // BoneTable: 64 u16 + u8 + 3 padding = 132 bytes
-        skip(&mut c, bone_table_count as i64 * 132)?;
-    }
-
-    // shapes, shape_meshes, shape_values
-    skip(&mut c, shape_count as i64 * 16)?;      // Shape: 4 + 6 + 6 = 16
-    skip(&mut c, shape_mesh_count as i64 * 12)?;  // ShapeMesh: 4+4+4
-    skip(&mut c, shape_value_count as i64 * 4)?;   // ShapeValue: 2+2
-
-    // submesh_bone_map
-    if is_v6 {
-        let map_size = read_u16(&mut c)?;
-        skip(&mut c, (map_size / 2) as i64 * 2)?;
-    } else {
-        let map_size = read_u32(&mut c)?;
-        skip(&mut c, (map_size / 2) as i64 * 2)?;
-    }
-
-    // padding + bounding boxes (skip to end of metadata)
-    let padding_size = read_u8(&mut c)?;
-    skip(&mut c, padding_size as i64)?;
-    // 4 bounding boxes (min[4] + max[4] = 32 bytes each)
-    skip(&mut c, 4 * 32)?;
-    // bone bounding boxes
-    skip(&mut c, bone_count as i64 * 32)?;
-
-    // 现在 cursor 位于数据区起始位置
-    let data_offset = c.position() as u32;
+    // 剩余元数据 (bone tables, shapes, bounding boxes 等) 不需要解析
+    // vertex_data_offset / index_data_offset 是文件内绝对偏移，可直接 seek
 
     // ---- 提取 LOD 0 (High) 的网格数据 ----
     let lod = &lods[0];
@@ -255,8 +208,7 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
 
         for k in 0..mesh.vertex_count as usize {
             for elem in decl {
-                let abs_offset = data_offset
-                    + lod.vertex_data_offset
+                let abs_offset = lod.vertex_data_offset
                     + mesh.vertex_buffer_offset[elem.stream as usize]
                     + elem.offset as u32
                     + mesh.vertex_buffer_stride[elem.stream as usize] as u32 * k as u32;
@@ -307,7 +259,7 @@ fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
         }
 
         // 读取索引
-        let idx_offset = data_offset + lod.index_data_offset + mesh.start_index * 2;
+        let idx_offset = lod.index_data_offset + mesh.start_index * 2;
         c.seek(SeekFrom::Start(idx_offset as u64)).map_err(|e| format!("seek index: {e}"))?;
         let mut indices = Vec::with_capacity(mesh.index_count as usize);
         for _ in 0..mesh.index_count {

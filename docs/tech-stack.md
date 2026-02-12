@@ -12,7 +12,7 @@
 | BCn 纹理解码 | 不支持 | 内置 |
 | 维护状态 | 活跃 | 活跃 |
 
-**选择: physis** — 格式覆盖最全，内置 BCn 解码和 STM 解析，对染色预览至关重要。
+**选择: ironworks (MIT)** — physis (GPL-3.0) 的 SqPack 解析器无法处理国服 region=0 的文件头。ironworks 不解析 region 字段，兼容性更好。STM/BCn 解码需要后续自行实现或引入 physis 作为补充。
 
 ## 渲染层
 
@@ -27,7 +27,7 @@
 ## 最终技术栈
 
 ```
-physis          — SqPack 读取、MDL/TEX/MTRL/STM/EXD 解析
+ironworks       — SqPack 读取、EXD 数据表、MDL/TEX/MTRL 解析
 eframe + egui   — 窗口管理 + UI (装备列表、染色选择器)
 wgpu            — 3D 渲染 (自定义 WGSL shader)
 ```

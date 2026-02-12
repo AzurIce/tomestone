@@ -1,59 +1,39 @@
-use std::path::Path;
+mod game_data;
 
-use ironworks::Ironworks;
-use ironworks::excel::Excel;
-use ironworks::ffxiv::{FsResource, Mapper};
-use ironworks::sqpack::SqPack;
+use std::path::Path;
+use game_data::GameData;
 
 fn main() {
     let install_dir = Path::new(r"G:\最终幻想XIV");
+    let game = GameData::new(install_dir);
 
-    let resource = FsResource::at(install_dir);
-    let sqpack = SqPack::new(resource);
-    let ironworks = Ironworks::new().with_resource(sqpack);
+    println!("正在加载装备列表...");
+    let items = game.load_equipment_list();
+    println!("共加载 {} 件装备\n", items.len());
 
-    println!("✓ SqPack 连接成功\n");
-
-    let excel = Excel::new(&ironworks, Mapper::new());
-
-    // 列出所有可用的表
-    if let Ok(list) = excel.list() {
-        println!("Excel 表总数: {}", list.iter().count());
-        let key_sheets = ["Item", "Stain", "EquipSlotCategory"];
-        for name in &key_sheets {
-            if list.has(name) {
-                println!("  ✓ {}", name);
-            }
-        }
+    // 按槽位统计
+    let mut by_slot = std::collections::HashMap::new();
+    for item in &items {
+        *by_slot.entry(item.slot).or_insert(0u32) += 1;
+    }
+    for (slot, count) in &by_slot {
+        println!("  {} ({}): {} 件", slot.display_name(), slot.slot_abbr(), count);
     }
 
-    // 读取 Stain 表 — 尝试更大范围的行 ID
-    println!("\nStain 表 (染料) 前 5 条:");
-    if let Ok(sheet) = excel.sheet("Stain") {
-        let mut count = 0;
-        for row_id in 0u32..200 {
-            if count >= 5 { break; }
-            if let Ok(row) = sheet.row(row_id) {
-                if let Ok(field) = row.field(0) {
-                    println!("  [{}] {:?}", row_id, field);
-                    count += 1;
-                }
-            }
-        }
+    // 打印前 10 件身体装备
+    println!("\n前 10 件身体装备:");
+    for item in items.iter().filter(|i| i.slot == game_data::EquipSlot::Body).take(10) {
+        println!("  [{}] {} → e{:04}/v{:04} ({})",
+            item.row_id, item.name, item.set_id, item.variant_id, item.model_path());
     }
 
-    // 读取纹理文件
-    println!("\n文件读取测试:");
-    let test_files = [
-        "chara/equipment/e0001/texture/v01_c0201e0001_top_d.tex",
-        "chara/equipment/e0001/model/c0201e0001_top.mdl",
-    ];
-    for path in &test_files {
-        match ironworks.file::<Vec<u8>>(path) {
+    // 验证模型文件是否存在
+    println!("\n模型文件验证:");
+    for item in items.iter().filter(|i| i.slot == game_data::EquipSlot::Body).take(3) {
+        let path = item.model_path();
+        match game.ironworks().file::<Vec<u8>>(&path) {
             Ok(data) => println!("  ✓ {} ({} bytes)", path, data.len()),
             Err(e) => println!("  ✗ {} ({})", path, e),
         }
     }
-
-    println!("\n✓ Milestone 1 完成: SqPack 数据读取验证通过");
 }

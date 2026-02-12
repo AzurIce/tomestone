@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ironworks = { version = "0.4.1", features = ["sqpack", "excel", "ffxiv"] }
+eframe = "0.33"
 
 [profile.dev]
 overflow-checks = false

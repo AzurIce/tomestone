@@ -69,6 +69,20 @@ impl EquipmentItem {
             self.slot.slot_abbr()
         )
     }
+
+    /// 返回候选模型路径列表（c0201 Hyur Male 优先，c0101 Hyur Female 回退）
+    pub fn model_paths(&self) -> Vec<String> {
+        vec![
+            format!(
+                "chara/equipment/e{:04}/model/c0201e{:04}_{}.mdl",
+                self.set_id, self.set_id, self.slot.slot_abbr()
+            ),
+            format!(
+                "chara/equipment/e{:04}/model/c0101e{:04}_{}.mdl",
+                self.set_id, self.set_id, self.slot.slot_abbr()
+            ),
+        ]
+    }
 }
 
 // Item 表列索引 (通过 column inspector 确定)

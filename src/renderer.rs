@@ -1,6 +1,6 @@
 use egui_wgpu::wgpu;
 
-use crate::mdl_loader::{MeshData, Vertex};
+use crate::mdl_loader::{BoundingBox, MeshData, Vertex};
 
 /// 相机参数
 pub struct Camera {
@@ -31,6 +31,25 @@ impl Camera {
         let view = look_at(eye, self.target, [0.0, 1.0, 0.0]);
         let proj = perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
         mat4_mul(proj, view)
+    }
+
+    /// 根据包围盒自动对焦相机
+    pub fn focus_on(&mut self, bbox: &BoundingBox) {
+        self.target = bbox.center();
+        let size = bbox.size();
+        self.distance = if size > 0.01 { size * 1.2 } else { 3.0 };
+        self.yaw = 0.0;
+        self.pitch = 0.15;
+    }
+
+    /// 右键拖拽平移
+    pub fn pan(&mut self, dx: f32, dy: f32) {
+        let right = [self.yaw.sin(), 0.0, -self.yaw.cos()];
+        let up = [0.0, 1.0, 0.0];
+        let scale = self.distance * 0.002;
+        for i in 0..3 {
+            self.target[i] += -right[i] * dx * scale + up[i] * dy * scale;
+        }
     }
 }
 
@@ -66,16 +85,19 @@ struct VsIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) color: vec4<f32>,
 };
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
+    @location(1) color: vec4<f32>,
 };
 
 @vertex fn vs_main(v: VsIn) -> VsOut {
     var out: VsOut;
     out.clip = u.view_proj * vec4<f32>(v.position, 1.0);
     out.normal = v.normal;
+    out.color = v.color;
     return out;
 }
 
@@ -84,7 +106,7 @@ struct VsOut {
     let n = normalize(f.normal);
     let ndl = max(dot(n, light_dir), 0.0);
     let ambient = 0.15;
-    let col = vec3<f32>(0.8, 0.8, 0.85) * (ambient + ndl * (1.0 - ambient));
+    let col = f.color.xyz * (ambient + ndl * (1.0 - ambient));
     return vec4<f32>(col, 1.0);
 }
 "#;
@@ -145,6 +167,7 @@ impl ModelRenderer {
                         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
                         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 12, shader_location: 1 },
                         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 24, shader_location: 2 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 32, shader_location: 3 },
                     ],
                 }],
                 compilation_options: Default::default(),

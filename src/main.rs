@@ -7,6 +7,7 @@ use std::path::Path;
 use eframe::egui;
 use egui_wgpu::wgpu;
 use game_data::{EquipSlot, EquipmentItem, GameData};
+use mdl_loader::BoundingBox;
 use renderer::{Camera, ModelRenderer};
 
 const ALL_SLOTS: [EquipSlot; 5] = [
@@ -29,6 +30,7 @@ struct App {
     camera: Camera,
     model_texture_id: Option<egui::TextureId>,
     loaded_model_idx: Option<usize>,
+    last_bbox: Option<BoundingBox>,
 }
 
 impl App {
@@ -45,6 +47,7 @@ impl App {
             camera: Camera::default(),
             model_texture_id: None,
             loaded_model_idx: None,
+            last_bbox: None,
         }
     }
 
@@ -161,16 +164,20 @@ impl eframe::App for App {
                     // 加载模型 (选中新装备时)
                     if self.loaded_model_idx != Some(idx) {
                         self.loaded_model_idx = Some(idx);
-                        let path = item.model_path();
-                        match mdl_loader::load_mdl(self.game.ironworks(), &path) {
+                        let paths = item.model_paths();
+                        match mdl_loader::load_mdl_with_fallback(self.game.ironworks(), &paths) {
                             Ok(meshes) if !meshes.is_empty() => {
+                                let bbox = mdl_loader::compute_bounding_box(&meshes);
                                 self.model_renderer.set_mesh_data(&self.render_state.device, &meshes);
+                                self.camera.focus_on(&bbox);
+                                self.last_bbox = Some(bbox);
                                 if let Some(tid) = self.model_texture_id.take() {
                                     self.render_state.renderer.write().free_texture(&tid);
                                 }
                             }
                             _ => {
                                 self.model_renderer.set_mesh_data(&self.render_state.device, &[]);
+                                self.last_bbox = None;
                             }
                         }
                     }
@@ -191,6 +198,17 @@ impl eframe::App for App {
                         self.camera.yaw += delta.x * 0.01;
                         self.camera.pitch = (self.camera.pitch + delta.y * 0.01)
                             .clamp(-1.5, 1.5);
+                    }
+                    if response.dragged_by(egui::PointerButton::Secondary) {
+                        let delta = response.drag_delta();
+                        self.camera.pan(delta.x, delta.y);
+                    }
+                    if response.double_clicked() {
+                        if let Some(bbox) = &self.last_bbox {
+                            self.camera.focus_on(bbox);
+                        } else {
+                            self.camera = Camera::default();
+                        }
                     }
                     if response.hovered() {
                         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -241,6 +259,15 @@ impl eframe::App for App {
                         }
 
                         ctx.request_repaint();
+
+                        // 操作提示
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 8.0, rect.bottom() - 8.0),
+                            egui::Align2::LEFT_BOTTOM,
+                            "左键旋转 | 右键平移 | 滚轮缩放 | 双击重置",
+                            egui::FontId::proportional(12.0),
+                            egui::Color32::from_rgba_premultiplied(180, 180, 180, 160),
+                        );
                     } else {
                         ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 36));
                         ui.painter().text(

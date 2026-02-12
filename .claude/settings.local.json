@@ -30,7 +30,11 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(curl:*)",
       "WebFetch(domain:v2.xivapi.com)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo check:*)",
+      "mcp__fetch__fetch_txt",
+      "Bash(find:*)"
     ]
   }
 }

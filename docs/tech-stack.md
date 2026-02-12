@@ -27,10 +27,27 @@
 ## 最终技术栈
 
 ```
-ironworks       — SqPack 读取、EXD 数据表、MDL/TEX/MTRL 解析
-eframe + egui   — 窗口管理 + UI (装备列表、染色选择器)
-wgpu            — 3D 渲染 (自定义 WGSL shader)
+ironworks 0.4.1  — SqPack 读取、EXD 数据表、MDL 解析 (features: sqpack, excel, ffxiv, mdl)
+eframe 0.33      — 窗口管理 + UI (装备列表、染色选择器)
+egui-wgpu 0.33   — egui 与 wgpu 集成
+wgpu 27          — 3D 渲染 (自定义 WGSL shader, 离屏渲染)
+bytemuck 1       — GPU 数据类型转换
 ```
+
+## 已实现功能
+
+1. **SqPack 数据读取** — ironworks + FsResource 读取国服游戏数据
+2. **装备数据层** — 从 Item EXD 表加载 14937 件防具 (中文名称)
+3. **egui 浏览界面** — 搜索、槽位过滤、虚拟滚动列表
+4. **MDL 模型解析** — 提取 Position/Normal/UV 顶点属性 (支持 Vec3/Vec4)
+5. **wgpu 3D 渲染** — 离屏渲染管线、方向光 WGSL 着色器、轨道相机、鼠标交互
+
+## 待实现
+
+- TEX 纹理加载 + 材质渲染
+- MTRL 材质解析
+- Colorset/STM 染色系统
+- BCn 纹理解码
 
 ## 参考项目
 

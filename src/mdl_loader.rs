@@ -1,4 +1,4 @@
-use ironworks::file::mdl::{Lod, ModelContainer, VertexAttributeKind, VertexValues};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use ironworks::Ironworks;
 
 /// 从 MDL 文件提取的渲染用网格数据
@@ -16,84 +16,350 @@ pub struct Vertex {
     pub uv: [f32; 2],
 }
 
-/// 从 ironworks 加载 MDL 并提取网格数据
-pub fn load_mdl(ironworks: &Ironworks, path: &str) -> Option<Vec<MeshData>> {
-    let container: ModelContainer = ironworks.file(path).ok()?;
-    let model = container.model(Lod::High);
-    let meshes = model.meshes();
+/// 从 ironworks 加载 MDL 并提取网格数据 (支持 v5/v6 Dawntrail 格式)
+pub fn load_mdl(ironworks: &Ironworks, path: &str) -> Result<Vec<MeshData>, String> {
+    let data: Vec<u8> = ironworks.file(path)
+        .map_err(|e| format!("读取文件失败: {e}"))?;
+    parse_mdl(&data)
+}
 
+// ---- 二进制读取工具 ----
+
+fn read_u8(c: &mut Cursor<&[u8]>) -> Result<u8, String> {
+    let mut b = [0u8; 1];
+    c.read_exact(&mut b).map_err(|e| format!("read_u8: {e}"))?;
+    Ok(b[0])
+}
+fn read_u16(c: &mut Cursor<&[u8]>) -> Result<u16, String> {
+    let mut b = [0u8; 2];
+    c.read_exact(&mut b).map_err(|e| format!("read_u16: {e}"))?;
+    Ok(u16::from_le_bytes(b))
+}
+fn read_u32(c: &mut Cursor<&[u8]>) -> Result<u32, String> {
+    let mut b = [0u8; 4];
+    c.read_exact(&mut b).map_err(|e| format!("read_u32: {e}"))?;
+    Ok(u32::from_le_bytes(b))
+}
+fn read_f32(c: &mut Cursor<&[u8]>) -> Result<f32, String> {
+    let mut b = [0u8; 4];
+    c.read_exact(&mut b).map_err(|e| format!("read_f32: {e}"))?;
+    Ok(f32::from_le_bytes(b))
+}
+fn skip(c: &mut Cursor<&[u8]>, n: i64) -> Result<(), String> {
+    c.seek(SeekFrom::Current(n)).map_err(|e| format!("skip: {e}"))?;
+    Ok(())
+}
+
+// ---- 顶点声明 ----
+
+const VERTEX_ELEMENT_SLOTS: usize = 17;
+
+#[derive(Clone, Copy, Debug)]
+struct VertexElement {
+    stream: u8,
+    offset: u8,
+    format: u8,  // 2=Single3, 3=Single4, 8=ByteFloat4, 13=Half2, 14=Half4
+    usage: u8,   // 0=Position, 3=Normal, 4=UV
+}
+
+fn read_vertex_declarations(c: &mut Cursor<&[u8]>, count: u16) -> Result<Vec<Vec<VertexElement>>, String> {
+    let mut decls = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let mut elements = Vec::new();
+        for _ in 0..VERTEX_ELEMENT_SLOTS {
+            let stream = read_u8(c)?;
+            let offset = read_u8(c)?;
+            let format = read_u8(c)?;
+            let usage = read_u8(c)?;
+            skip(c, 4)?; // usage_index + padding
+            if stream != 0xFF {
+                elements.push(VertexElement { stream, offset, format, usage });
+            }
+        }
+        decls.push(elements);
+    }
+    Ok(decls)
+}
+
+// ---- MDL 解析 ----
+
+struct MdlMesh {
+    vertex_count: u16,
+    index_count: u32,
+    start_index: u32,
+    vertex_buffer_offset: [u32; 3],
+    vertex_buffer_stride: [u8; 3],
+}
+
+struct MdlLod {
+    mesh_index: u16,
+    mesh_count: u16,
+    vertex_data_offset: u32,
+    index_data_offset: u32,
+}
+
+fn parse_mdl(data: &[u8]) -> Result<Vec<MeshData>, String> {
+    let mut c = Cursor::new(data);
+
+    // ---- File Header (68 bytes) ----
+    let version = read_u32(&mut c)?;
+    let _stack_size = read_u32(&mut c)?;
+    let _runtime_size = read_u32(&mut c)?;
+    let vertex_decl_count = read_u16(&mut c)?;
+    let _material_count = read_u16(&mut c)?;
+    skip(&mut c, 12 + 12 + 12 + 12)?; // vertex_offsets, index_offsets, vertex/index_buffer_size
+    skip(&mut c, 4)?; // lod_count + 3 bools/padding
+
+    // ---- Vertex Declarations ----
+    let decls = read_vertex_declarations(&mut c, vertex_decl_count)?;
+
+    // ---- Strings ----
+    let _string_count = read_u16(&mut c)?;
+    skip(&mut c, 2)?; // padding
+    let string_size = read_u32(&mut c)?;
+    skip(&mut c, string_size as i64)?;
+
+    // ---- Model Header ----
+    let _radius = read_f32(&mut c)?;
+    let mesh_count = read_u16(&mut c)?;
+    let attribute_count = read_u16(&mut c)?;
+    let submesh_count = read_u16(&mut c)?;
+    let _material_count2 = read_u16(&mut c)?;
+    let bone_count = read_u16(&mut c)?;
+    let bone_table_count = read_u16(&mut c)?;
+    let shape_count = read_u16(&mut c)?;
+    let shape_mesh_count = read_u16(&mut c)?;
+    let shape_value_count = read_u16(&mut c)?;
+    let _lod_count = read_u8(&mut c)?;
+    let _flags1 = read_u8(&mut c)?;
+    let element_id_count = read_u16(&mut c)?;
+    let terrain_shadow_mesh_count = read_u8(&mut c)?;
+    let flags2 = read_u8(&mut c)?;
+    skip(&mut c, 4 + 4)?; // clip distances
+    let _unknown4 = read_u16(&mut c)?;
+    let terrain_shadow_submesh_count = read_u16(&mut c)?;
+    skip(&mut c, 1 + 1 + 1 + 1 + 2 + 2 + 2 + 6)?; // unknowns + padding
+
+    // ---- Element IDs ----
+    skip(&mut c, element_id_count as i64 * 32)?;
+
+    // ---- LODs (3) ----
+    let mut lods = Vec::new();
+    for _ in 0..3 {
+        let mesh_index = read_u16(&mut c)?;
+        let mesh_count_lod = read_u16(&mut c)?;
+        skip(&mut c, 4 + 4)?; // lod ranges
+        skip(&mut c, 2 * 8)?; // water/shadow/terrain/fog mesh index+count
+        skip(&mut c, 4 + 4 + 4 + 4)?; // edge_geometry + polygon_count + unknown
+        skip(&mut c, 4 + 4)?; // vertex/index buffer size
+        let vertex_data_offset = read_u32(&mut c)?;
+        let index_data_offset = read_u32(&mut c)?;
+        lods.push(MdlLod { mesh_index, mesh_count: mesh_count_lod, vertex_data_offset, index_data_offset });
+    }
+
+    // ---- Extra LODs (optional) ----
+    let extra_lod_enabled = (flags2 & 0x10) != 0;
+    if extra_lod_enabled {
+        skip(&mut c, 3 * 32)?; // 3 ExtraLod structs, 16 u16 each = 32 bytes
+    }
+
+    // ---- Meshes ----
+    let mut meshes = Vec::with_capacity(mesh_count as usize);
+    for _ in 0..mesh_count {
+        let vertex_count = read_u16(&mut c)?;
+        skip(&mut c, 2)?; // padding
+        let index_count = read_u32(&mut c)?;
+        let _material_index = read_u16(&mut c)?;
+        let _submesh_index = read_u16(&mut c)?;
+        let _submesh_count = read_u16(&mut c)?;
+        let _bone_table_index = read_u16(&mut c)?;
+        let start_index = read_u32(&mut c)?;
+        let vbo0 = read_u32(&mut c)?;
+        let vbo1 = read_u32(&mut c)?;
+        let vbo2 = read_u32(&mut c)?;
+        let vbs0 = read_u8(&mut c)?;
+        let vbs1 = read_u8(&mut c)?;
+        let vbs2 = read_u8(&mut c)?;
+        let _stream_count = read_u8(&mut c)?;
+        meshes.push(MdlMesh {
+            vertex_count, index_count, start_index,
+            vertex_buffer_offset: [vbo0, vbo1, vbo2],
+            vertex_buffer_stride: [vbs0, vbs1, vbs2],
+        });
+    }
+
+    // ---- 跳过剩余元数据 (不需要解析，直接跳到数据区) ----
+    // attribute_name_offsets
+    skip(&mut c, attribute_count as i64 * 4)?;
+    // terrain_shadow_meshes (16 bytes each)
+    skip(&mut c, terrain_shadow_mesh_count as i64 * 16)?;
+    // submeshes (16 bytes each)
+    skip(&mut c, submesh_count as i64 * 16)?;
+    // terrain_shadow_submeshes (12 bytes each)
+    skip(&mut c, terrain_shadow_submesh_count as i64 * 12)?;
+    // material_name_offsets + bone_name_offsets
+    skip(&mut c, (_material_count2 as i64 + bone_count as i64) * 4)?;
+
+    // ---- Bone Tables (v5 vs v6 差异!) ----
+    let is_v6 = version >= 0x0100_0006;
+    if is_v6 {
+        // BoneTableV2: 2 padding + u16 count + count*u16 + optional 2 align
+        for _ in 0..bone_table_count {
+            skip(&mut c, 2)?; // padding
+            let bone_count_bt = read_u16(&mut c)?;
+            skip(&mut c, bone_count_bt as i64 * 2)?;
+            if bone_count_bt % 2 == 0 {
+                skip(&mut c, 2)?; // alignment padding
+            }
+        }
+    } else {
+        // BoneTable: 64 u16 + u8 + 3 padding = 132 bytes
+        skip(&mut c, bone_table_count as i64 * 132)?;
+    }
+
+    // shapes, shape_meshes, shape_values
+    skip(&mut c, shape_count as i64 * 16)?;      // Shape: 4 + 6 + 6 = 16
+    skip(&mut c, shape_mesh_count as i64 * 12)?;  // ShapeMesh: 4+4+4
+    skip(&mut c, shape_value_count as i64 * 4)?;   // ShapeValue: 2+2
+
+    // submesh_bone_map
+    if is_v6 {
+        let map_size = read_u16(&mut c)?;
+        skip(&mut c, (map_size / 2) as i64 * 2)?;
+    } else {
+        let map_size = read_u32(&mut c)?;
+        skip(&mut c, (map_size / 2) as i64 * 2)?;
+    }
+
+    // padding + bounding boxes (skip to end of metadata)
+    let padding_size = read_u8(&mut c)?;
+    skip(&mut c, padding_size as i64)?;
+    // 4 bounding boxes (min[4] + max[4] = 32 bytes each)
+    skip(&mut c, 4 * 32)?;
+    // bone bounding boxes
+    skip(&mut c, bone_count as i64 * 32)?;
+
+    // 现在 cursor 位于数据区起始位置
+    let data_offset = c.position() as u32;
+
+    // ---- 提取 LOD 0 (High) 的网格数据 ----
+    let lod = &lods[0];
     let mut result = Vec::new();
 
-    for mesh in &meshes {
-        let indices = mesh.indices().ok()?;
-        let attributes = mesh.attributes().ok()?;
+    for mi in lod.mesh_index..(lod.mesh_index + lod.mesh_count) {
+        let mesh = &meshes[mi as usize];
+        let decl = &decls[mi as usize];
+        if mesh.vertex_count == 0 { continue; }
 
-        let mut positions: Option<&Vec<[f32; 3]>> = None;
-        let mut normals: Option<&Vec<[f32; 3]>> = None;
-        let mut uvs_v2: Option<&Vec<[f32; 2]>> = None;
-        let mut positions_v4: Option<&Vec<[f32; 4]>> = None;
-        let mut normals_v4: Option<&Vec<[f32; 4]>> = None;
-        let mut uvs_v4: Option<&Vec<[f32; 4]>> = None;
+        let mut vertices = vec![Vertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2] }; mesh.vertex_count as usize];
 
-        for attr in &attributes {
-            match (&attr.kind, &attr.values) {
-                (VertexAttributeKind::Position, VertexValues::Vector3(v)) => positions = Some(v),
-                (VertexAttributeKind::Position, VertexValues::Vector4(v)) => positions_v4 = Some(v),
-                (VertexAttributeKind::Normal, VertexValues::Vector3(v)) => normals = Some(v),
-                (VertexAttributeKind::Normal, VertexValues::Vector4(v)) => normals_v4 = Some(v),
-                (VertexAttributeKind::Uv, VertexValues::Vector2(v)) => uvs_v2 = Some(v),
-                (VertexAttributeKind::Uv, VertexValues::Vector4(v)) if uvs_v4.is_none() => {
-                    uvs_v4 = Some(v)
+        for k in 0..mesh.vertex_count as usize {
+            for elem in decl {
+                let abs_offset = data_offset
+                    + lod.vertex_data_offset
+                    + mesh.vertex_buffer_offset[elem.stream as usize]
+                    + elem.offset as u32
+                    + mesh.vertex_buffer_stride[elem.stream as usize] as u32 * k as u32;
+
+                c.seek(SeekFrom::Start(abs_offset as u64)).map_err(|e| format!("seek vertex: {e}"))?;
+
+                match (elem.usage, elem.format) {
+                    // Position
+                    (0, 2) => { // Single3
+                        vertices[k].position = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    }
+                    (0, 3) => { // Single4
+                        vertices[k].position = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    }
+                    (0, 14) => { // Half4
+                        let v = read_half4(&mut c)?;
+                        vertices[k].position = [v[0], v[1], v[2]];
+                    }
+                    // Normal
+                    (3, 2) => { // Single3
+                        vertices[k].normal = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    }
+                    (3, 3) => { // Single4
+                        vertices[k].normal = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    }
+                    (3, 14) => { // Half4
+                        let v = read_half4(&mut c)?;
+                        vertices[k].normal = [v[0], v[1], v[2]];
+                    }
+                    (3, 8) => { // ByteFloat4 (packed normal)
+                        let v = read_byte_float4(&mut c)?;
+                        vertices[k].normal = [v[0] * 2.0 - 1.0, v[1] * 2.0 - 1.0, v[2] * 2.0 - 1.0];
+                    }
+                    // UV
+                    (4, 1) => { // Single2
+                        vertices[k].uv = [read_f32(&mut c)?, read_f32(&mut c)?];
+                    }
+                    (4, 13) => { // Half2
+                        vertices[k].uv = read_half2(&mut c)?;
+                    }
+                    (4, 14) => { // Half4 (take first 2)
+                        let v = read_half4(&mut c)?;
+                        vertices[k].uv = [v[0], v[1]];
+                    }
+                    _ => {} // 跳过其他属性 (BlendWeights, Color, Tangent 等)
                 }
-                _ => {}
             }
         }
 
-        // 确定顶点数量
-        let vertex_count = positions
-            .map(|v| v.len())
-            .or(positions_v4.map(|v| v.len()))
-            .unwrap_or(0);
-
-        if vertex_count == 0 {
-            continue;
-        }
-
-        let mut vertices = Vec::with_capacity(vertex_count);
-        for i in 0..vertex_count {
-            let position = if let Some(p) = positions {
-                p[i]
-            } else if let Some(p) = positions_v4 {
-                [p[i][0], p[i][1], p[i][2]]
-            } else {
-                [0.0; 3]
-            };
-
-            let normal = if let Some(n) = normals {
-                n[i]
-            } else if let Some(n) = normals_v4 {
-                [n[i][0], n[i][1], n[i][2]]
-            } else {
-                [0.0, 1.0, 0.0]
-            };
-
-            let uv = if let Some(u) = uvs_v2 {
-                u[i]
-            } else if let Some(u) = uvs_v4 {
-                [u[i][0], u[i][1]]
-            } else {
-                [0.0; 2]
-            };
-
-            vertices.push(Vertex {
-                position,
-                normal,
-                uv,
-            });
+        // 读取索引
+        let idx_offset = data_offset + lod.index_data_offset + mesh.start_index * 2;
+        c.seek(SeekFrom::Start(idx_offset as u64)).map_err(|e| format!("seek index: {e}"))?;
+        let mut indices = Vec::with_capacity(mesh.index_count as usize);
+        for _ in 0..mesh.index_count {
+            indices.push(read_u16(&mut c)?);
         }
 
         result.push(MeshData { vertices, indices });
     }
 
-    Some(result)
+    Ok(result)
+}
+
+// ---- Half-float 读取 ----
+
+fn read_half2(c: &mut Cursor<&[u8]>) -> Result<[f32; 2], String> {
+    let a = read_u16(c)?;
+    let b = read_u16(c)?;
+    Ok([half_to_f32(a), half_to_f32(b)])
+}
+
+fn read_half4(c: &mut Cursor<&[u8]>) -> Result<[f32; 4], String> {
+    let a = read_u16(c)?;
+    let b = read_u16(c)?;
+    let cc = read_u16(c)?;
+    let d = read_u16(c)?;
+    Ok([half_to_f32(a), half_to_f32(b), half_to_f32(cc), half_to_f32(d)])
+}
+
+fn read_byte_float4(c: &mut Cursor<&[u8]>) -> Result<[f32; 4], String> {
+    Ok([
+        read_u8(c)? as f32 / 255.0,
+        read_u8(c)? as f32 / 255.0,
+        read_u8(c)? as f32 / 255.0,
+        read_u8(c)? as f32 / 255.0,
+    ])
+}
+
+fn half_to_f32(h: u16) -> f32 {
+    let sign = ((h >> 15) & 1) as u32;
+    let exp = ((h >> 10) & 0x1F) as u32;
+    let mant = (h & 0x3FF) as u32;
+    if exp == 0 {
+        if mant == 0 { return if sign == 1 { -0.0 } else { 0.0 }; }
+        // subnormal
+        let v = mant as f32 / 1024.0 * (2.0f32).powi(-14);
+        return if sign == 1 { -v } else { v };
+    }
+    if exp == 31 {
+        return if mant == 0 {
+            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
+        } else { f32::NAN };
+    }
+    let bits = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
+    f32::from_bits(bits)
 }

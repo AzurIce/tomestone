@@ -163,14 +163,13 @@ impl eframe::App for App {
                         self.loaded_model_idx = Some(idx);
                         let path = item.model_path();
                         match mdl_loader::load_mdl(self.game.ironworks(), &path) {
-                            Some(meshes) => {
+                            Ok(meshes) if !meshes.is_empty() => {
                                 self.model_renderer.set_mesh_data(&self.render_state.device, &meshes);
-                                // 重置纹理以触发重新注册
                                 if let Some(tid) = self.model_texture_id.take() {
                                     self.render_state.renderer.write().free_texture(&tid);
                                 }
                             }
-                            None => {
+                            _ => {
                                 self.model_renderer.set_mesh_data(&self.render_state.device, &[]);
                             }
                         }

@@ -308,7 +308,24 @@ impl eframe::App for App {
         egui::SidePanel::left("equipment_list")
             .default_width(350.0)
             .show(ctx, |ui| {
-                ui.heading("装备浏览器");
+                ui.horizontal(|ui| {
+                    ui.heading("装备浏览器");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .selectable_label(self.view_mode == ViewMode::SetGroup, "套装")
+                            .clicked()
+                        {
+                            self.view_mode = ViewMode::SetGroup;
+                            self.flat_rows_dirty = true;
+                        }
+                        if ui
+                            .selectable_label(self.view_mode == ViewMode::List, "列表")
+                            .clicked()
+                        {
+                            self.view_mode = ViewMode::List;
+                        }
+                    });
+                });
                 ui.separator();
 
                 // 搜索框
@@ -352,29 +369,40 @@ impl eframe::App for App {
 
                 ui.separator();
 
-                let filtered: Vec<(usize, String)> = self
-                    .filtered_and_sorted_items()
-                    .into_iter()
-                    .map(|(idx, item)| (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name)))
-                    .collect();
-                ui.label(format!("{} 件", filtered.len()));
+                match self.view_mode {
+                    ViewMode::List => {
+                        // ── 列表视图 ──
+                        let filtered: Vec<(usize, String)> = self
+                            .filtered_and_sorted_items()
+                            .into_iter()
+                            .map(|(idx, item)| {
+                                (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name))
+                            })
+                            .collect();
+                        ui.label(format!("{} 件", filtered.len()));
 
-                // 装备列表 (虚拟滚动)
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    18.0,
-                    filtered.len(),
-                    |ui, row_range| {
-                        for row_idx in row_range {
-                            if let Some((global_idx, label)) = filtered.get(row_idx) {
-                                let selected = self.selected_item == Some(*global_idx);
-                                if ui.selectable_label(selected, label).clicked() {
-                                    self.selected_item = Some(*global_idx);
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            18.0,
+                            filtered.len(),
+                            |ui, row_range| {
+                                for row_idx in row_range {
+                                    if let Some((global_idx, label)) = filtered.get(row_idx) {
+                                        let selected =
+                                            self.selected_item == Some(*global_idx);
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            self.selected_item = Some(*global_idx);
+                                        }
+                                    }
                                 }
-                            }
-                        }
-                    },
-                );
+                            },
+                        );
+                    }
+                    ViewMode::SetGroup => {
+                        // ── 套装视图（占位） ──
+                        ui.label("套装视图（即将实现）");
+                    }
+                }
             });
 
         // 中央面板: 装备详情 + 3D 预览

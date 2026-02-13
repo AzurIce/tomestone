@@ -243,6 +243,85 @@ impl App {
         result
     }
 
+    fn item_matches_filter(&self, item: &EquipmentItem) -> bool {
+        if let Some(slot) = self.selected_slot {
+            if item.slot != slot {
+                return false;
+            }
+        }
+        if !self.search.is_empty() {
+            let search_lower = self.search.to_lowercase();
+            if !item.name.to_lowercase().contains(&search_lower) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn build_flat_rows(&mut self) {
+        self.flat_rows_dirty = false;
+        self.cached_flat_rows.clear();
+
+        // 收集并排序套装
+        let mut sets_with_items: Vec<(usize, Vec<usize>)> = Vec::new();
+        for (set_idx, eq_set) in self.equipment_sets.iter().enumerate() {
+            let filtered: Vec<usize> = eq_set
+                .item_indices
+                .iter()
+                .copied()
+                .filter(|&i| self.item_matches_filter(&self.items[i]))
+                .collect();
+            if !filtered.is_empty() {
+                sets_with_items.push((set_idx, filtered));
+            }
+        }
+
+        // 按 sort_order 排序套装
+        match self.sort_order {
+            SortOrder::ByName => {
+                sets_with_items.sort_by(|a, b| {
+                    self.equipment_sets[a.0]
+                        .display_name
+                        .cmp(&self.equipment_sets[b.0].display_name)
+                });
+            }
+            SortOrder::BySetId => {
+                sets_with_items.sort_by(|a, b| {
+                    self.equipment_sets[a.0]
+                        .set_id
+                        .cmp(&self.equipment_sets[b.0].set_id)
+                });
+            }
+            SortOrder::BySlot => {
+                sets_with_items.sort_by(|a, b| {
+                    self.equipment_sets[a.0]
+                        .display_name
+                        .cmp(&self.equipment_sets[b.0].display_name)
+                });
+            }
+        }
+
+        for (set_idx, filtered_indices) in sets_with_items {
+            let eq_set = &self.equipment_sets[set_idx];
+            let expanded = self.expanded_sets.contains(&eq_set.set_id);
+            self.cached_flat_rows.push(FlatRow::GroupHeader {
+                set_id: eq_set.set_id,
+                display_name: eq_set.display_name.clone(),
+                item_count: filtered_indices.len(),
+                expanded,
+            });
+            if expanded {
+                for &global_idx in &filtered_indices {
+                    let item = &self.items[global_idx];
+                    self.cached_flat_rows.push(FlatRow::Item {
+                        global_idx,
+                        label: format!("[{}] {}", item.slot.slot_abbr(), item.name),
+                    });
+                }
+            }
+        }
+    }
+
     /// 重新烘焙所有使用 ColorTable 的纹理（染色后调用）
     fn rebake_textures(&mut self) {
         let stm = match &self.stm {
@@ -329,12 +408,17 @@ impl eframe::App for App {
                 ui.separator();
 
                 // 搜索框
+                let prev_search = self.search.clone();
                 ui.horizontal(|ui| {
                     ui.label("搜索:");
                     ui.text_edit_singleline(&mut self.search);
                 });
+                if self.search != prev_search {
+                    self.flat_rows_dirty = true;
+                }
 
                 // 排序
+                let prev_sort = self.sort_order;
                 ui.horizontal(|ui| {
                     ui.label("排序:");
                     egui::ComboBox::from_id_salt("sort_order")
@@ -345,8 +429,12 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.sort_order, SortOrder::BySlot, SortOrder::BySlot.label());
                         });
                 });
+                if self.sort_order != prev_sort {
+                    self.flat_rows_dirty = true;
+                }
 
                 // 槽位过滤
+                let prev_slot = self.selected_slot;
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(self.selected_slot.is_none(), "全部")
@@ -366,6 +454,9 @@ impl eframe::App for App {
                         }
                     }
                 });
+                if self.selected_slot != prev_slot {
+                    self.flat_rows_dirty = true;
+                }
 
                 ui.separator();
 
@@ -399,8 +490,82 @@ impl eframe::App for App {
                         );
                     }
                     ViewMode::SetGroup => {
-                        // ── 套装视图（占位） ──
-                        ui.label("套装视图（即将实现）");
+                        // ── 套装视图 ──
+                        if self.flat_rows_dirty {
+                            self.build_flat_rows();
+                        }
+                        let rows = self.cached_flat_rows.clone();
+                        let num_sets = rows
+                            .iter()
+                            .filter(|r| matches!(r, FlatRow::GroupHeader { .. }))
+                            .count();
+                        let num_items = rows
+                            .iter()
+                            .filter(|r| matches!(r, FlatRow::Item { .. }))
+                            .count();
+                        ui.label(format!("{} 组套装, {} 件装备", num_sets, num_items));
+
+                        let mut toggle_set: Option<u16> = None;
+                        let mut select_item: Option<usize> = None;
+
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            18.0,
+                            rows.len(),
+                            |ui, row_range| {
+                                for row_idx in row_range {
+                                    if let Some(row) = rows.get(row_idx) {
+                                        match row {
+                                            FlatRow::GroupHeader {
+                                                set_id,
+                                                display_name,
+                                                item_count,
+                                                expanded,
+                                            } => {
+                                                let arrow = if *expanded { "▼" } else { "▶" };
+                                                let text = format!(
+                                                    "{} {} ({}件) e{:04}",
+                                                    arrow, display_name, item_count, set_id
+                                                );
+                                                let resp = ui.selectable_label(
+                                                    false,
+                                                    egui::RichText::new(&text).strong(),
+                                                );
+                                                if resp.clicked() {
+                                                    toggle_set = Some(*set_id);
+                                                }
+                                            }
+                                            FlatRow::Item { global_idx, label } => {
+                                                ui.horizontal(|ui| {
+                                                    ui.add_space(16.0);
+                                                    let selected = self.selected_item
+                                                        == Some(*global_idx);
+                                                    if ui
+                                                        .selectable_label(selected, label)
+                                                        .clicked()
+                                                    {
+                                                        select_item = Some(*global_idx);
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        );
+
+                        // 闭包外处理状态变更
+                        if let Some(sid) = toggle_set {
+                            if self.expanded_sets.contains(&sid) {
+                                self.expanded_sets.remove(&sid);
+                            } else {
+                                self.expanded_sets.insert(sid);
+                            }
+                            self.flat_rows_dirty = true;
+                        }
+                        if let Some(idx) = select_item {
+                            self.selected_item = Some(idx);
+                        }
                     }
                 }
             });

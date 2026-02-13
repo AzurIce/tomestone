@@ -611,6 +611,49 @@ impl eframe::App for App {
                         ui.end_row();
                     });
 
+                    // 同套装装备
+                    if let Some(&set_idx) = self.set_id_to_set_idx.get(&item.set_id) {
+                        let eq_set = &self.equipment_sets[set_idx];
+                        if eq_set.item_indices.len() > 1 {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "同套装装备 ({})",
+                                    eq_set.display_name
+                                ))
+                                .strong(),
+                            );
+                            let sibling_indices: Vec<(usize, String, bool)> = eq_set
+                                .item_indices
+                                .iter()
+                                .map(|&i| {
+                                    let sib = &self.items[i];
+                                    let is_current = i == idx;
+                                    (
+                                        i,
+                                        format!("[{}] {}", sib.slot.slot_abbr(), sib.name),
+                                        is_current,
+                                    )
+                                })
+                                .collect();
+                            let mut clicked_sibling: Option<usize> = None;
+                            ui.horizontal_wrapped(|ui| {
+                                for (sib_idx, sib_label, is_current) in &sibling_indices {
+                                    if *is_current {
+                                        ui.label(
+                                            egui::RichText::new(sib_label).strong().underline(),
+                                        );
+                                    } else if ui.link(sib_label).clicked() {
+                                        clicked_sibling = Some(*sib_idx);
+                                    }
+                                }
+                            });
+                            if let Some(sib) = clicked_sibling {
+                                self.selected_item = Some(sib);
+                            }
+                        }
+                    }
+
                     ui.separator();
 
                     // 染料选择器

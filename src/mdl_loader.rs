@@ -8,6 +8,7 @@ pub struct MdlResult {
 }
 
 /// 从 MDL 文件提取的渲染用网格数据
+#[derive(Clone)]
 pub struct MeshData {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u16>,

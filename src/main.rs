@@ -1,3 +1,4 @@
+mod dye;
 mod game_data;
 mod mdl_loader;
 mod renderer;
@@ -7,9 +8,11 @@ use std::path::Path;
 
 use eframe::egui;
 use egui_wgpu::wgpu;
-use game_data::{EquipSlot, EquipmentItem, GameData};
+use game_data::{EquipSlot, EquipmentItem, GameData, StainEntry};
 use mdl_loader::BoundingBox;
+use physis::stm::StainingTemplate;
 use renderer::{Camera, ModelRenderer};
+use tex_loader::CachedMaterial;
 
 const ALL_SLOTS: [EquipSlot; 5] = [
     EquipSlot::Head,
@@ -32,10 +35,24 @@ struct App {
     model_texture_id: Option<egui::TextureId>,
     loaded_model_idx: Option<usize>,
     last_bbox: Option<BoundingBox>,
+    // 染色缓存
+    cached_materials: std::collections::HashMap<u16, CachedMaterial>,
+    cached_meshes: Vec<mdl_loader::MeshData>,
+    // 染色系统
+    stains: Vec<StainEntry>,
+    stm: Option<StainingTemplate>,
+    selected_stain_id: u32,
+    needs_rebake: bool,
 }
 
 impl App {
-    fn new(game: GameData, items: Vec<EquipmentItem>, render_state: egui_wgpu::RenderState) -> Self {
+    fn new(
+        game: GameData,
+        items: Vec<EquipmentItem>,
+        stains: Vec<StainEntry>,
+        stm: Option<StainingTemplate>,
+        render_state: egui_wgpu::RenderState,
+    ) -> Self {
         let model_renderer = ModelRenderer::new(&render_state.device);
         Self {
             items,
@@ -49,6 +66,12 @@ impl App {
             model_texture_id: None,
             loaded_model_idx: None,
             last_bbox: None,
+            cached_materials: std::collections::HashMap::new(),
+            cached_meshes: Vec::new(),
+            stains,
+            stm,
+            selected_stain_id: 0,
+            needs_rebake: false,
         }
     }
 
@@ -71,10 +94,68 @@ impl App {
             })
             .collect()
     }
+
+    /// 重新烘焙所有使用 ColorTable 的纹理（染色后调用）
+    fn rebake_textures(&mut self) {
+        let stm = match &self.stm {
+            Some(s) => s,
+            None => return,
+        };
+
+        // 为每个 mesh 生成新纹理 (None = 不更新)
+        let mut new_textures: Vec<Option<tex_loader::TextureData>> = Vec::new();
+
+        for mesh in &self.cached_meshes {
+            let mat_idx = mesh.material_index;
+            if let Some(cached) = self.cached_materials.get(&mat_idx) {
+                if cached.uses_color_table {
+                    if let (Some(color_table), Some(id_tex)) =
+                        (&cached.color_table, &cached.id_texture)
+                    {
+                        let dyed_colors = if self.selected_stain_id > 0 {
+                            if let Some(dye_table) = &cached.color_dye_table {
+                                Some(dye::apply_dye(
+                                    color_table,
+                                    dye_table,
+                                    stm,
+                                    self.selected_stain_id,
+                                ))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        let baked = tex_loader::bake_color_table_texture(
+                            id_tex,
+                            color_table,
+                            dyed_colors.as_ref(),
+                        );
+                        new_textures.push(Some(baked));
+                        continue;
+                    }
+                }
+            }
+            // 非 ColorTable 材质 → 不更新
+            new_textures.push(None);
+        }
+
+        self.model_renderer.update_textures(
+            &self.render_state.device,
+            &self.render_state.queue,
+            &new_textures,
+        );
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 染色重烘焙 (在 UI 借用之前执行)
+        if self.needs_rebake {
+            self.needs_rebake = false;
+            self.rebake_textures();
+        }
+
         // 左侧面板: 装备列表
         egui::SidePanel::left("equipment_list")
             .default_width(350.0)
@@ -162,15 +243,87 @@ impl eframe::App for App {
 
                     ui.separator();
 
+                    // 染料选择器
+                    let has_dyeable = self.cached_materials.values().any(|m| m.uses_color_table);
+                    if has_dyeable {
+                        ui.horizontal(|ui| {
+                            ui.label("染料:");
+                            let prev_stain = self.selected_stain_id;
+                            let current_label = if self.selected_stain_id == 0 {
+                                "无染料".to_string()
+                            } else {
+                                self.stains
+                                    .iter()
+                                    .find(|s| s.id == self.selected_stain_id)
+                                    .map(|s| s.name.clone())
+                                    .unwrap_or_else(|| format!("染料 #{}", self.selected_stain_id))
+                            };
+                            egui::ComboBox::from_id_salt("dye_selector")
+                                .selected_text(&current_label)
+                                .width(200.0)
+                                .show_ui(ui, |ui| {
+                                    // 无染料选项
+                                    ui.selectable_value(&mut self.selected_stain_id, 0, "无染料");
+                                    ui.separator();
+                                    // 染料列表
+                                    for stain in &self.stains {
+                                        let color = egui::Color32::from_rgb(
+                                            stain.color[0],
+                                            stain.color[1],
+                                            stain.color[2],
+                                        );
+                                        ui.horizontal(|ui| {
+                                            // 色块预览
+                                            let (rect, _) = ui.allocate_exact_size(
+                                                egui::vec2(14.0, 14.0),
+                                                egui::Sense::hover(),
+                                            );
+                                            ui.painter().rect_filled(rect, 2.0, color);
+                                            // 染料名
+                                            if ui
+                                                .selectable_value(
+                                                    &mut self.selected_stain_id,
+                                                    stain.id,
+                                                    &stain.name,
+                                                )
+                                                .clicked()
+                                            {}
+                                        });
+                                    }
+                                });
+                            // 当前色块
+                            if self.selected_stain_id > 0 {
+                                if let Some(stain) = self.stains.iter().find(|s| s.id == self.selected_stain_id) {
+                                    let color = egui::Color32::from_rgb(
+                                        stain.color[0],
+                                        stain.color[1],
+                                        stain.color[2],
+                                    );
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(20.0, 20.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(rect, 3.0, color);
+                                }
+                            }
+                            if self.selected_stain_id != prev_stain {
+                                self.needs_rebake = true;
+                            }
+                        });
+                    }
+
+                    // 染色重烘焙 (标记在下方 UI 中设置，延迟到下一帧执行)
+
                     // 加载模型 (选中新装备时)
                     if self.loaded_model_idx != Some(idx) {
                         self.loaded_model_idx = Some(idx);
+                        self.selected_stain_id = 0; // 重置染料选择
                         let paths = item.model_paths();
                         match mdl_loader::load_mdl_with_fallback(&self.game, &paths) {
                             Ok(result) if !result.meshes.is_empty() => {
                                 let bbox = mdl_loader::compute_bounding_box(&result.meshes);
                                 println!("加载纹理: {} 个材质, {} 个网格", result.material_names.len(), result.meshes.len());
-                                let textures = tex_loader::load_mesh_textures(
+                                let load_result = tex_loader::load_mesh_textures(
                                     &self.game,
                                     &result.material_names,
                                     &result.meshes,
@@ -181,8 +334,10 @@ impl eframe::App for App {
                                     &self.render_state.device,
                                     &self.render_state.queue,
                                     &result.meshes,
-                                    &textures,
+                                    &load_result.textures,
                                 );
+                                self.cached_materials = load_result.materials;
+                                self.cached_meshes = result.meshes.clone();
                                 self.camera.focus_on(&bbox);
                                 self.last_bbox = Some(bbox);
                                 if let Some(tid) = self.model_texture_id.take() {
@@ -322,6 +477,13 @@ fn main() {
     let items = game.load_equipment_list();
     println!("共加载 {} 件装备", items.len());
 
+    println!("正在加载染料列表...");
+    let stains = game.load_stain_list();
+    println!("共加载 {} 种染料", stains.len());
+
+    println!("正在加载染色模板...");
+    let stm = game.load_staining_template();
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 700.0])
@@ -337,7 +499,7 @@ fn main() {
             let render_state = cc.wgpu_render_state.as_ref()
                 .expect("需要 wgpu 后端")
                 .clone();
-            Ok(Box::new(App::new(game, items, render_state)))
+            Ok(Box::new(App::new(game, items, stains, stm, render_state)))
         }),
     )
     .unwrap();

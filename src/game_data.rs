@@ -2,10 +2,20 @@ use std::cell::RefCell;
 use std::path::Path;
 
 use physis::excel::{Field, Row};
+use physis::mtrl::{ColorDyeTable, ColorTable};
 use physis::resource::{Resource as _, SqPackResource};
+use physis::stm::StainingTemplate;
 use physis::Language;
 
 use crate::tex_loader::TextureData;
+
+/// 解析后的完整材质数据
+pub struct ParsedMaterial {
+    pub texture_paths: Vec<String>,
+    pub color_table: Option<ColorTable>,
+    pub color_dye_table: Option<ColorDyeTable>,
+    pub shader_package_name: String,
+}
 
 /// 装备槽位
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -113,6 +123,16 @@ const COL_ICON: usize = 10;
 const COL_EQUIP_SLOT_CATEGORY: usize = 17;
 const COL_MODEL_MAIN: usize = 47;
 
+/// 染料条目
+#[derive(Debug, Clone)]
+pub struct StainEntry {
+    pub id: u32,
+    pub name: String,
+    pub color: [u8; 3],
+    pub shade: u8,
+    pub is_metallic: bool,
+}
+
 /// 游戏数据访问层
 pub struct GameData {
     physis: RefCell<SqPackResource>,
@@ -143,10 +163,29 @@ impl GameData {
         })
     }
 
-    /// 解析 MTRL 文件，返回纹理路径列表
-    pub fn parsed_mtrl(&self, path: &str) -> Option<Vec<String>> {
+    /// 解析 MTRL 文件，返回完整材质数据
+    pub fn parsed_mtrl(&self, path: &str) -> Option<ParsedMaterial> {
         let mtrl: physis::mtrl::Material = self.physis.borrow_mut().parsed(path).ok()?;
-        Some(mtrl.texture_paths)
+        Some(ParsedMaterial {
+            texture_paths: mtrl.texture_paths,
+            color_table: mtrl.color_table,
+            color_dye_table: mtrl.color_dye_table,
+            shader_package_name: mtrl.shader_package_name,
+        })
+    }
+
+    /// 加载 STM 染色模板
+    pub fn load_staining_template(&self) -> Option<StainingTemplate> {
+        let stm: StainingTemplate = self
+            .physis
+            .borrow_mut()
+            .parsed("chara/base_material/stainingtemplate.stm")
+            .ok()?;
+        println!(
+            "STM 加载成功: {} 个模板",
+            stm.entries.len()
+        );
+        Some(stm)
     }
 
     /// 加载所有可装备的防具物品
@@ -178,6 +217,80 @@ impl GameData {
             }
         }
         items
+    }
+
+    /// 加载染料列表
+    pub fn load_stain_list(&self) -> Vec<StainEntry> {
+        let mut physis = self.physis.borrow_mut();
+
+        let exh = match physis.read_excel_sheet_header("Stain") {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("无法加载 Stain 表头: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let sheet = match physis.read_excel_sheet(&exh, "Stain", Language::ChineseSimplified) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("无法加载 Stain 表: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let mut stains = Vec::new();
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if let Some(stain) = Self::parse_stain_row(row_id, row) {
+                    stains.push(stain);
+                }
+            }
+        }
+        stains
+    }
+
+    fn parse_stain_row(row_id: u32, row: &Row) -> Option<StainEntry> {
+        // Col 0 = Color (u32, 0xRRGGBB)
+        let color_val = match row.columns.get(0)? {
+            Field::UInt32(v) => *v,
+            _ => return None,
+        };
+
+        if color_val == 0 {
+            return None; // 跳过空行
+        }
+
+        let color = [
+            ((color_val >> 16) & 0xFF) as u8,
+            ((color_val >> 8) & 0xFF) as u8,
+            (color_val & 0xFF) as u8,
+        ];
+
+        // Col 1 = Shade (u8)
+        let shade = match row.columns.get(1) {
+            Some(Field::UInt8(v)) => *v,
+            _ => 0,
+        };
+
+        // Name: 尝试 Col 2 和 Col 3（不同版本列序可能不同）
+        let name = row.columns.iter().find_map(|col| {
+            if let Field::String(s) = col {
+                if !s.is_empty() { return Some(s.clone()); }
+            }
+            None
+        }).unwrap_or_default();
+
+        // IsMetallic: 查找第一个 Bool 列
+        let is_metallic = row.columns.iter().any(|col| matches!(col, Field::Bool(true)));
+
+        Some(StainEntry {
+            id: row_id,
+            name,
+            color,
+            shade,
+            is_metallic,
+        })
     }
 
     fn parse_equipment_row(row_id: u32, row: &Row) -> Option<EquipmentItem> {

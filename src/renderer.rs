@@ -335,6 +335,27 @@ impl ModelRenderer {
         }
     }
 
+    /// 仅更新指定 mesh 的纹理 bind group，不重建顶点/索引缓冲区
+    /// textures[i] 为 None 表示不更新该 mesh
+    pub fn update_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, textures: &[Option<TextureData>]) {
+        // 预先创建需要更新的 bind groups
+        let new_bind_groups: Vec<Option<wgpu::BindGroup>> = (0..self.meshes.len())
+            .map(|i| {
+                if let Some(Some(tex)) = textures.get(i) {
+                    Some(self.create_texture_bind_group(device, queue, &tex.rgba, tex.width, tex.height))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // 然后赋值
+        for (gpu_mesh, bg) in self.meshes.iter_mut().zip(new_bind_groups) {
+            if let Some(bg) = bg {
+                gpu_mesh.texture_bind_group = bg;
+            }
+        }
+    }
+
     fn ensure_targets(&mut self, device: &wgpu::Device, w: u32, h: u32) {
         if self.target_size == [w, h] && self.color_texture.is_some() {
             return;

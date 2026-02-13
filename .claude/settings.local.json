@@ -38,7 +38,9 @@
       "mcp__fetch__fetch_html",
       "Bash(git fetch:*)",
       "Bash(cargo test:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "WebFetch(domain:xivapi.com)",
+      "mcp__imhex-pattern-doc__searchDocumentation"
     ],
     "additionalDirectories": [
       "E:\\_ff14"

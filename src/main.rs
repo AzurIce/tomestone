@@ -46,7 +46,6 @@ struct EquipmentSet {
     set_id: u16,
     display_name: String,
     item_indices: Vec<usize>,
-    slots: Vec<EquipSlot>,
 }
 
 #[derive(Clone)]
@@ -107,17 +106,10 @@ fn build_equipment_sets(items: &[EquipmentItem]) -> Vec<EquipmentSet> {
         .into_iter()
         .map(|(set_id, item_indices)| {
             let display_name = derive_set_name(items, &item_indices);
-            let slots: Vec<EquipSlot> = item_indices
-                .iter()
-                .map(|&i| items[i].slot)
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect();
             EquipmentSet {
                 set_id,
                 display_name,
                 item_indices,
-                slots,
             }
         })
         .collect()
@@ -396,6 +388,12 @@ impl eframe::App for App {
                         {
                             self.view_mode = ViewMode::SetGroup;
                             self.flat_rows_dirty = true;
+                            // 自动展开当前选中装备所在的套装
+                            if let Some(sel_idx) = self.selected_item {
+                                if let Some(item) = self.items.get(sel_idx) {
+                                    self.expanded_sets.insert(item.set_id);
+                                }
+                            }
                         }
                         if ui
                             .selectable_label(self.view_mode == ViewMode::List, "列表")

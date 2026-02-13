@@ -503,7 +503,24 @@ impl eframe::App for App {
                             .iter()
                             .filter(|r| matches!(r, FlatRow::Item { .. }))
                             .count();
-                        ui.label(format!("{} 组套装, {} 件装备", num_sets, num_items));
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{} 组套装, {} 件装备", num_sets, num_items));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("全部折叠").clicked() {
+                                        self.expanded_sets.clear();
+                                        self.flat_rows_dirty = true;
+                                    }
+                                    if ui.small_button("全部展开").clicked() {
+                                        for eq_set in &self.equipment_sets {
+                                            self.expanded_sets.insert(eq_set.set_id);
+                                        }
+                                        self.flat_rows_dirty = true;
+                                    }
+                                },
+                            );
+                        });
 
                         let mut toggle_set: Option<u16> = None;
                         let mut select_item: Option<usize> = None;

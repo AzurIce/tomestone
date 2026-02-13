@@ -4,6 +4,7 @@ mod mdl_loader;
 mod renderer;
 mod tex_loader;
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use eframe::egui;
@@ -13,6 +14,114 @@ use mdl_loader::BoundingBox;
 use physis::stm::StainingTemplate;
 use renderer::{Camera, ModelRenderer};
 use tex_loader::CachedMaterial;
+
+// ── 视图模式 & 排序 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    List,
+    SetGroup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortOrder {
+    ByName,
+    BySetId,
+    BySlot,
+}
+
+impl SortOrder {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::ByName => "按名称",
+            Self::BySetId => "按套装",
+            Self::BySlot => "按槽位",
+        }
+    }
+}
+
+// ── 套装分组 ──
+
+struct EquipmentSet {
+    set_id: u16,
+    display_name: String,
+    item_indices: Vec<usize>,
+    slots: Vec<EquipSlot>,
+}
+
+#[derive(Clone)]
+enum FlatRow {
+    GroupHeader {
+        set_id: u16,
+        display_name: String,
+        item_count: usize,
+        expanded: bool,
+    },
+    Item {
+        global_idx: usize,
+        label: String,
+    },
+}
+
+fn longest_common_prefix(strings: &[&str]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    let first = strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        len = len.min(s.len());
+        for (i, (a, b)) in first.bytes().zip(s.bytes()).enumerate() {
+            if a != b {
+                len = len.min(i);
+                break;
+            }
+        }
+    }
+    // 回退到最后一个完整 UTF-8 字符边界
+    let prefix = &first[..len];
+    // 去掉尾部不完整字符（保证 UTF-8 安全）
+    let trimmed = prefix.trim_end();
+    trimmed.to_string()
+}
+
+fn derive_set_name(items: &[EquipmentItem], indices: &[usize]) -> String {
+    let names: Vec<&str> = indices.iter().map(|&i| items[i].name.as_str()).collect();
+    let prefix = longest_common_prefix(&names);
+    if prefix.is_empty() {
+        // 没有公共前缀，使用第一个物品名
+        if let Some(&idx) = indices.first() {
+            return items[idx].name.clone();
+        }
+        return String::new();
+    }
+    prefix
+}
+
+fn build_equipment_sets(items: &[EquipmentItem]) -> Vec<EquipmentSet> {
+    let mut by_set: BTreeMap<u16, Vec<usize>> = BTreeMap::new();
+    for (i, item) in items.iter().enumerate() {
+        by_set.entry(item.set_id).or_default().push(i);
+    }
+    by_set
+        .into_iter()
+        .map(|(set_id, item_indices)| {
+            let display_name = derive_set_name(items, &item_indices);
+            let slots: Vec<EquipSlot> = item_indices
+                .iter()
+                .map(|&i| items[i].slot)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            EquipmentSet {
+                set_id,
+                display_name,
+                item_indices,
+                slots,
+            }
+        })
+        .collect()
+}
 
 const ALL_SLOTS: [EquipSlot; 5] = [
     EquipSlot::Head,
@@ -27,6 +136,15 @@ struct App {
     search: String,
     selected_slot: Option<EquipSlot>,
     selected_item: Option<usize>,
+    // 视图模式 & 排序
+    view_mode: ViewMode,
+    sort_order: SortOrder,
+    // 套装分组
+    equipment_sets: Vec<EquipmentSet>,
+    set_id_to_set_idx: HashMap<u16, usize>,
+    expanded_sets: HashSet<u16>,
+    cached_flat_rows: Vec<FlatRow>,
+    flat_rows_dirty: bool,
     // 3D 渲染
     game: GameData,
     render_state: egui_wgpu::RenderState,
@@ -36,7 +154,7 @@ struct App {
     loaded_model_idx: Option<usize>,
     last_bbox: Option<BoundingBox>,
     // 染色缓存
-    cached_materials: std::collections::HashMap<u16, CachedMaterial>,
+    cached_materials: HashMap<u16, CachedMaterial>,
     cached_meshes: Vec<mdl_loader::MeshData>,
     // 染色系统
     stains: Vec<StainEntry>,
@@ -54,11 +172,24 @@ impl App {
         render_state: egui_wgpu::RenderState,
     ) -> Self {
         let model_renderer = ModelRenderer::new(&render_state.device);
+        let equipment_sets = build_equipment_sets(&items);
+        let set_id_to_set_idx: HashMap<u16, usize> = equipment_sets
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.set_id, i))
+            .collect();
         Self {
             items,
             search: String::new(),
             selected_slot: None,
             selected_item: None,
+            view_mode: ViewMode::List,
+            sort_order: SortOrder::ByName,
+            equipment_sets,
+            set_id_to_set_idx,
+            expanded_sets: HashSet::new(),
+            cached_flat_rows: Vec::new(),
+            flat_rows_dirty: true,
             game,
             render_state,
             model_renderer,
@@ -66,7 +197,7 @@ impl App {
             model_texture_id: None,
             loaded_model_idx: None,
             last_bbox: None,
-            cached_materials: std::collections::HashMap::new(),
+            cached_materials: HashMap::new(),
             cached_meshes: Vec::new(),
             stains,
             stm,

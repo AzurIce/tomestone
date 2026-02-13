@@ -206,8 +206,9 @@ impl App {
         }
     }
 
-    fn filtered_items(&self) -> Vec<(usize, &EquipmentItem)> {
-        self.items
+    fn filtered_and_sorted_items(&self) -> Vec<(usize, &EquipmentItem)> {
+        let mut result: Vec<(usize, &EquipmentItem)> = self
+            .items
             .iter()
             .enumerate()
             .filter(|(_, item)| {
@@ -217,13 +218,29 @@ impl App {
                     }
                 }
                 if !self.search.is_empty() {
-                    if !item.name.contains(&self.search) {
+                    let search_lower = self.search.to_lowercase();
+                    if !item.name.to_lowercase().contains(&search_lower) {
                         return false;
                     }
                 }
                 true
             })
-            .collect()
+            .collect();
+        match self.sort_order {
+            SortOrder::ByName => result.sort_by(|a, b| a.1.name.cmp(&b.1.name)),
+            SortOrder::BySetId => result.sort_by(|a, b| {
+                a.1.set_id
+                    .cmp(&b.1.set_id)
+                    .then_with(|| a.1.slot.slot_abbr().cmp(b.1.slot.slot_abbr()))
+            }),
+            SortOrder::BySlot => result.sort_by(|a, b| {
+                a.1.slot
+                    .slot_abbr()
+                    .cmp(b.1.slot.slot_abbr())
+                    .then_with(|| a.1.name.cmp(&b.1.name))
+            }),
+        }
+        result
     }
 
     /// 重新烘焙所有使用 ColorTable 的纹理（染色后调用）
@@ -300,6 +317,18 @@ impl eframe::App for App {
                     ui.text_edit_singleline(&mut self.search);
                 });
 
+                // 排序
+                ui.horizontal(|ui| {
+                    ui.label("排序:");
+                    egui::ComboBox::from_id_salt("sort_order")
+                        .selected_text(self.sort_order.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.sort_order, SortOrder::ByName, SortOrder::ByName.label());
+                            ui.selectable_value(&mut self.sort_order, SortOrder::BySetId, SortOrder::BySetId.label());
+                            ui.selectable_value(&mut self.sort_order, SortOrder::BySlot, SortOrder::BySlot.label());
+                        });
+                });
+
                 // 槽位过滤
                 ui.horizontal(|ui| {
                     if ui
@@ -324,7 +353,7 @@ impl eframe::App for App {
                 ui.separator();
 
                 let filtered: Vec<(usize, String)> = self
-                    .filtered_items()
+                    .filtered_and_sorted_items()
                     .into_iter()
                     .map(|(idx, item)| (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name)))
                     .collect();

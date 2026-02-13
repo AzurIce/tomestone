@@ -1,15 +1,14 @@
 [package]
-name = "ff-tools"
+name = "tomestone"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ironworks = { version = "0.4.1", features = ["sqpack", "excel", "ffxiv", "mdl", "mtrl", "tex"] }
 eframe = { version = "0.33", features = ["wgpu"] }
 egui-wgpu = "0.33"
 wgpu = "27"
 bytemuck = { version = "1", features = ["derive"] }
-texpresso = "2"
+physis = { path = "../physis" }
 
 [profile.dev]
 overflow-checks = false

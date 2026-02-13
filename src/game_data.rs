@@ -1,9 +1,11 @@
+use std::cell::RefCell;
 use std::path::Path;
 
-use ironworks::excel::{ExcelOptions, Field};
-use ironworks::ffxiv::{FsResource, Language, Mapper};
-use ironworks::sqpack::SqPack;
-use ironworks::Ironworks;
+use physis::excel::{Field, Row};
+use physis::resource::{Resource as _, SqPackResource};
+use physis::Language;
+
+use crate::tex_loader::TextureData;
 
 /// 装备槽位
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,18 +72,38 @@ impl EquipmentItem {
         )
     }
 
-    /// 返回候选模型路径列表（c0201 Hyur Male 优先，c0101 Hyur Female 回退）
+    /// 返回候选模型路径列表，按种族码优先级尝试
     pub fn model_paths(&self) -> Vec<String> {
-        vec![
-            format!(
-                "chara/equipment/e{:04}/model/c0201e{:04}_{}.mdl",
-                self.set_id, self.set_id, self.slot.slot_abbr()
-            ),
-            format!(
-                "chara/equipment/e{:04}/model/c0101e{:04}_{}.mdl",
-                self.set_id, self.set_id, self.slot.slot_abbr()
-            ),
-        ]
+        // FF14 种族码: c{raceId:02}{bodyId:02}
+        // 优先尝试通用种族，再尝试其他种族的专属模型
+        const RACE_CODES: &[&str] = &[
+            "c0201", // Hyur Midlander ♀
+            "c0101", // Hyur Midlander ♂
+            "c0401", // Hyur Highlander ♀
+            "c0301", // Hyur Highlander ♂
+            "c0801", // Miqo'te ♀
+            "c0701", // Miqo'te ♂
+            "c0601", // Elezen ♀
+            "c0501", // Elezen ♂
+            "c1401", // Au Ra ♀
+            "c1301", // Au Ra ♂
+            "c1201", // Lalafell ♀
+            "c1101", // Lalafell ♂
+            "c1001", // Roegadyn ♀
+            "c0901", // Roegadyn ♂
+            "c1801", // Viera ♀
+            "c1701", // Viera ♂
+            "c1501", // Hrothgar ♂
+        ];
+        RACE_CODES
+            .iter()
+            .map(|rc| {
+                format!(
+                    "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
+                    self.set_id, rc, self.set_id, self.slot.slot_abbr()
+                )
+            })
+            .collect()
     }
 }
 
@@ -93,28 +115,53 @@ const COL_MODEL_MAIN: usize = 47;
 
 /// 游戏数据访问层
 pub struct GameData {
-    ironworks: Ironworks,
+    physis: RefCell<SqPackResource>,
 }
 
 impl GameData {
     pub fn new(install_dir: &Path) -> Self {
-        let resource = FsResource::at(install_dir);
-        let sqpack = SqPack::new(resource);
-        let ironworks = Ironworks::new().with_resource(sqpack);
-        Self { ironworks }
+        let game_dir = install_dir.join("game");
+        let physis = RefCell::new(SqPackResource::from_existing(game_dir.to_str().unwrap()));
+        Self { physis }
     }
 
-    pub fn ironworks(&self) -> &Ironworks {
-        &self.ironworks
+    /// 读取原始文件字节
+    pub fn read_file(&self, path: &str) -> Result<Vec<u8>, String> {
+        self.physis
+            .borrow_mut()
+            .read(path)
+            .ok_or_else(|| format!("physis 无法读取: {}", path))
+    }
+
+    /// 解析 TEX 文件，返回已解码的 RGBA 数据
+    pub fn parsed_tex(&self, path: &str) -> Option<TextureData> {
+        let tex: physis::tex::Texture = self.physis.borrow_mut().parsed(path).ok()?;
+        Some(TextureData {
+            rgba: tex.rgba,
+            width: tex.width,
+            height: tex.height,
+        })
+    }
+
+    /// 解析 MTRL 文件，返回纹理路径列表
+    pub fn parsed_mtrl(&self, path: &str) -> Option<Vec<String>> {
+        let mtrl: physis::mtrl::Material = self.physis.borrow_mut().parsed(path).ok()?;
+        Some(mtrl.texture_paths)
     }
 
     /// 加载所有可装备的防具物品
     pub fn load_equipment_list(&self) -> Vec<EquipmentItem> {
-        let excel = ExcelOptions::default()
-            .language(Language::ChineseSimplified)
-            .build(&self.ironworks, Mapper::new());
+        let mut physis = self.physis.borrow_mut();
 
-        let sheet = match excel.sheet("Item") {
+        let exh = match physis.read_excel_sheet_header("Item") {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("无法加载 Item 表头: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let sheet = match physis.read_excel_sheet(&exh, "Item", Language::ChineseSimplified) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("无法加载 Item 表: {}", e);
@@ -122,48 +169,29 @@ impl GameData {
             }
         };
 
-        let header = {
-            // 通过 ironworks 内部 API 获取 pages
-            // 我们需要遍历所有可能的行 ID
-            // Item 表的行 ID 范围通常是 0 ~ 45000+
-            let exh_path = "exd/Item.exh";
-            match self.ironworks.file::<ironworks::file::exh::ExcelHeader>(exh_path) {
-                Ok(h) => Some(h),
-                Err(_) => None,
-            }
-        };
-
         let mut items = Vec::new();
-
-        if let Some(header) = &header {
-            for page in header.pages() {
-                let start = page.start_id();
-                let count = page.row_count();
-                for row_id in start..start + count {
-                    if let Ok(row) = sheet.row(row_id) {
-                        if let Some(item) = Self::parse_equipment_row(row_id, &row) {
-                            items.push(item);
-                        }
-                    }
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if let Some(item) = Self::parse_equipment_row(row_id, row) {
+                    items.push(item);
                 }
             }
         }
-
         items
     }
 
-    fn parse_equipment_row(row_id: u32, row: &ironworks::excel::Row) -> Option<EquipmentItem> {
+    fn parse_equipment_row(row_id: u32, row: &Row) -> Option<EquipmentItem> {
         // 读取 EquipSlotCategory
-        let equip_cat = match row.field(COL_EQUIP_SLOT_CATEGORY) {
-            Ok(Field::U8(v)) => v,
+        let equip_cat = match row.columns.get(COL_EQUIP_SLOT_CATEGORY)? {
+            Field::UInt8(v) => *v,
             _ => return None,
         };
 
         let slot = EquipSlot::from_category(equip_cat)?;
 
         // 读取 ModelMain
-        let model_main = match row.field(COL_MODEL_MAIN) {
-            Ok(Field::U64(v)) => v,
+        let model_main = match row.columns.get(COL_MODEL_MAIN)? {
+            Field::UInt64(v) => *v,
             _ => return None,
         };
 
@@ -175,18 +203,19 @@ impl GameData {
         let variant_id = ((model_main >> 16) & 0xFFFF) as u16;
 
         // 读取名称
-        let name = match row.field(COL_NAME) {
-            Ok(Field::String(s)) => {
-                let s = s.to_string();
-                if s.is_empty() { return None; }
-                s
+        let name = match row.columns.get(COL_NAME)? {
+            Field::String(s) => {
+                if s.is_empty() {
+                    return None;
+                }
+                s.clone()
             }
             _ => return None,
         };
 
         // 读取图标
-        let icon_id = match row.field(COL_ICON) {
-            Ok(Field::U16(v)) => v,
+        let icon_id = match row.columns.get(COL_ICON) {
+            Some(Field::UInt16(v)) => *v,
             _ => 0,
         };
 

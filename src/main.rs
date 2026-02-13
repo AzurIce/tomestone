@@ -166,12 +166,12 @@ impl eframe::App for App {
                     if self.loaded_model_idx != Some(idx) {
                         self.loaded_model_idx = Some(idx);
                         let paths = item.model_paths();
-                        match mdl_loader::load_mdl_with_fallback(self.game.ironworks(), &paths) {
+                        match mdl_loader::load_mdl_with_fallback(&self.game, &paths) {
                             Ok(result) if !result.meshes.is_empty() => {
                                 let bbox = mdl_loader::compute_bounding_box(&result.meshes);
                                 println!("加载纹理: {} 个材质, {} 个网格", result.material_names.len(), result.meshes.len());
                                 let textures = tex_loader::load_mesh_textures(
-                                    self.game.ironworks(),
+                                    &self.game,
                                     &result.material_names,
                                     &result.meshes,
                                     item.set_id,
@@ -190,6 +190,9 @@ impl eframe::App for App {
                                 }
                             }
                             _ => {
+                                eprintln!("模型加载失败 e{:04} v{:04}: {:?}",
+                                    item.set_id, item.variant_id,
+                                    mdl_loader::load_mdl_with_fallback(&self.game, &paths).err());
                                 self.model_renderer.set_mesh_data(
                                     &self.render_state.device,
                                     &self.render_state.queue,

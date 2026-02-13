@@ -1,5 +1,5 @@
 use std::io::{Cursor, Read, Seek, SeekFrom};
-use ironworks::Ironworks;
+use crate::game_data::GameData;
 
 /// MDL 解析结果
 pub struct MdlResult {
@@ -66,10 +66,9 @@ pub fn compute_bounding_box(meshes: &[MeshData]) -> BoundingBox {
     BoundingBox { min, max }
 }
 
-/// 从 ironworks 加载 MDL 并提取网格数据 (支持 v5/v6 Dawntrail 格式)
-pub fn load_mdl(ironworks: &Ironworks, path: &str) -> Result<MdlResult, String> {
-    let data: Vec<u8> = ironworks.file(path)
-        .map_err(|e| format!("读取文件失败: {e}"))?;
+/// 从 ironworks/physis 加载 MDL 并提取网格数据 (支持 v5/v6 Dawntrail 格式)
+pub fn load_mdl(game: &GameData, path: &str) -> Result<MdlResult, String> {
+    let data = game.read_file(path)?;
     parse_mdl(&data)
 }
 
@@ -388,10 +387,10 @@ fn half_to_f32(h: u16) -> f32 {
 }
 
 /// 尝试多个路径加载 MDL，返回第一个成功的结果
-pub fn load_mdl_with_fallback(ironworks: &Ironworks, paths: &[String]) -> Result<MdlResult, String> {
+pub fn load_mdl_with_fallback(game: &GameData, paths: &[String]) -> Result<MdlResult, String> {
     let mut last_err = String::from("无候选路径");
     for path in paths {
-        match load_mdl(ironworks, path) {
+        match load_mdl(game, path) {
             Ok(result) if !result.meshes.is_empty() => return Ok(result),
             Ok(_) => { last_err = format!("{}: 网格为空", path); }
             Err(e) => { last_err = format!("{}: {}", path, e); }

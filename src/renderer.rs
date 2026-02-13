@@ -15,7 +15,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             distance: 3.0,
-            yaw: 0.0,
+            yaw: std::f32::consts::FRAC_PI_2,
             pitch: 0.3,
             target: [0.0, 0.8, 0.0],
         }
@@ -39,7 +39,7 @@ impl Camera {
         self.target = bbox.center();
         let size = bbox.size();
         self.distance = if size > 0.01 { size * 1.2 } else { 3.0 };
-        self.yaw = 0.0;
+        self.yaw = std::f32::consts::FRAC_PI_2;
         self.pitch = 0.15;
     }
 

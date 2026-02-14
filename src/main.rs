@@ -334,7 +334,7 @@ impl eframe::App for App {
                                     &self.render_state.device,
                                     &self.render_state.queue,
                                     &result.meshes,
-                                    &load_result.textures,
+                                    &load_result.mesh_textures,
                                 );
                                 self.cached_materials = load_result.materials;
                                 self.cached_meshes = result.meshes.clone();

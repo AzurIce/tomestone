@@ -23,6 +23,7 @@ pub struct Vertex {
     pub normal: [f32; 3],
     pub uv: [f32; 2],
     pub color: [f32; 4],
+    pub tangent: [f32; 4],
 }
 
 /// 模型包围盒
@@ -270,7 +271,7 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
         let decl = &decls[mi as usize];
         if mesh.vertex_count == 0 { continue; }
 
-        let mut vertices = vec![Vertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2], color: [1.0, 1.0, 1.0, 1.0] }; mesh.vertex_count as usize];
+        let mut vertices = vec![Vertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2], color: [1.0, 1.0, 1.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0] }; mesh.vertex_count as usize];
 
         for k in 0..mesh.vertex_count as usize {
             for elem in decl {
@@ -324,7 +325,16 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
                         let v = read_byte_float4(&mut c)?;
                         vertices[k].color = v;
                     }
-                    _ => {} // 跳过其他属性 (BlendWeights, Tangent 等)
+                    // Tangent1
+                    (6, 14) => { // Half4 (already in [-1,1] range)
+                        let v = read_half4(&mut c)?;
+                        vertices[k].tangent = v;
+                    }
+                    (6, 8) => { // ByteFloat4 (packed tangent, [0,1] → [-1,1])
+                        let v = read_byte_float4(&mut c)?;
+                        vertices[k].tangent = [v[0] * 2.0 - 1.0, v[1] * 2.0 - 1.0, v[2] * 2.0 - 1.0, v[3] * 2.0 - 1.0];
+                    }
+                    _ => {} // 跳过其他属性 (BlendWeights 等)
                 }
             }
         }

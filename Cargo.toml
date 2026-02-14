@@ -8,7 +8,7 @@ eframe = { version = "0.33", features = ["wgpu"] }
 egui-wgpu = "0.33"
 wgpu = "27"
 bytemuck = { version = "1", features = ["derive"] }
-physis = { path = "../physis" }
+physis = { git = "https://github.com/AzurIce/physis.git" }
 
 [profile.dev]
 overflow-checks = false

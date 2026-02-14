@@ -4,6 +4,7 @@ mod mdl_loader;
 mod renderer;
 mod tex_loader;
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use eframe::egui;
@@ -13,6 +14,102 @@ use mdl_loader::BoundingBox;
 use physis::stm::StainingTemplate;
 use renderer::{Camera, ModelRenderer};
 use tex_loader::CachedMaterial;
+
+// ── 视图模式 & 排序 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewMode {
+    List,
+    SetGroup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortOrder {
+    ByName,
+    BySetId,
+    BySlot,
+}
+
+impl SortOrder {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::ByName => "按名称",
+            Self::BySetId => "按套装",
+            Self::BySlot => "按槽位",
+        }
+    }
+}
+
+// ── 套装分组 ──
+
+struct EquipmentSet {
+    set_id: u16,
+    display_name: String,
+    item_indices: Vec<usize>,
+}
+
+#[derive(Clone)]
+enum FlatRow {
+    GroupHeader {
+        set_id: u16,
+        display_name: String,
+        item_count: usize,
+        expanded: bool,
+    },
+    Item {
+        global_idx: usize,
+        label: String,
+    },
+}
+
+fn longest_common_prefix(strings: &[&str]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+    let first = strings[0];
+    let mut len = first.len();
+    for s in &strings[1..] {
+        let common: usize = first
+            .chars()
+            .zip(s.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(c, _)| c.len_utf8())
+            .sum();
+        len = len.min(common);
+    }
+    first[..len].trim_end().to_string()
+}
+
+fn derive_set_name(items: &[EquipmentItem], indices: &[usize]) -> String {
+    let names: Vec<&str> = indices.iter().map(|&i| items[i].name.as_str()).collect();
+    let prefix = longest_common_prefix(&names);
+    if prefix.is_empty() {
+        // 没有公共前缀，使用第一个物品名
+        if let Some(&idx) = indices.first() {
+            return items[idx].name.clone();
+        }
+        return String::new();
+    }
+    prefix
+}
+
+fn build_equipment_sets(items: &[EquipmentItem]) -> Vec<EquipmentSet> {
+    let mut by_set: BTreeMap<u16, Vec<usize>> = BTreeMap::new();
+    for (i, item) in items.iter().enumerate() {
+        by_set.entry(item.set_id).or_default().push(i);
+    }
+    by_set
+        .into_iter()
+        .map(|(set_id, item_indices)| {
+            let display_name = derive_set_name(items, &item_indices);
+            EquipmentSet {
+                set_id,
+                display_name,
+                item_indices,
+            }
+        })
+        .collect()
+}
 
 const ALL_SLOTS: [EquipSlot; 5] = [
     EquipSlot::Head,
@@ -27,6 +124,15 @@ struct App {
     search: String,
     selected_slot: Option<EquipSlot>,
     selected_item: Option<usize>,
+    // 视图模式 & 排序
+    view_mode: ViewMode,
+    sort_order: SortOrder,
+    // 套装分组
+    equipment_sets: Vec<EquipmentSet>,
+    set_id_to_set_idx: HashMap<u16, usize>,
+    expanded_sets: HashSet<u16>,
+    cached_flat_rows: Vec<FlatRow>,
+    flat_rows_dirty: bool,
     // 3D 渲染
     game: GameData,
     render_state: egui_wgpu::RenderState,
@@ -36,7 +142,7 @@ struct App {
     loaded_model_idx: Option<usize>,
     last_bbox: Option<BoundingBox>,
     // 染色缓存
-    cached_materials: std::collections::HashMap<u16, CachedMaterial>,
+    cached_materials: HashMap<u16, CachedMaterial>,
     cached_meshes: Vec<mdl_loader::MeshData>,
     // 染色系统
     stains: Vec<StainEntry>,
@@ -54,11 +160,24 @@ impl App {
         render_state: egui_wgpu::RenderState,
     ) -> Self {
         let model_renderer = ModelRenderer::new(&render_state.device);
+        let equipment_sets = build_equipment_sets(&items);
+        let set_id_to_set_idx: HashMap<u16, usize> = equipment_sets
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.set_id, i))
+            .collect();
         Self {
             items,
             search: String::new(),
             selected_slot: None,
             selected_item: None,
+            view_mode: ViewMode::List,
+            sort_order: SortOrder::ByName,
+            equipment_sets,
+            set_id_to_set_idx,
+            expanded_sets: HashSet::new(),
+            cached_flat_rows: Vec::new(),
+            flat_rows_dirty: true,
             game,
             render_state,
             model_renderer,
@@ -66,7 +185,7 @@ impl App {
             model_texture_id: None,
             loaded_model_idx: None,
             last_bbox: None,
-            cached_materials: std::collections::HashMap::new(),
+            cached_materials: HashMap::new(),
             cached_meshes: Vec::new(),
             stains,
             stm,
@@ -75,8 +194,9 @@ impl App {
         }
     }
 
-    fn filtered_items(&self) -> Vec<(usize, &EquipmentItem)> {
-        self.items
+    fn filtered_and_sorted_items(&self) -> Vec<(usize, &EquipmentItem)> {
+        let mut result: Vec<(usize, &EquipmentItem)> = self
+            .items
             .iter()
             .enumerate()
             .filter(|(_, item)| {
@@ -86,13 +206,108 @@ impl App {
                     }
                 }
                 if !self.search.is_empty() {
-                    if !item.name.contains(&self.search) {
+                    let search_lower = self.search.to_lowercase();
+                    if !item.name.to_lowercase().contains(&search_lower) {
                         return false;
                     }
                 }
                 true
             })
-            .collect()
+            .collect();
+        match self.sort_order {
+            SortOrder::ByName => result.sort_by(|a, b| a.1.name.cmp(&b.1.name)),
+            SortOrder::BySetId => result.sort_by(|a, b| {
+                a.1.set_id
+                    .cmp(&b.1.set_id)
+                    .then_with(|| a.1.slot.slot_abbr().cmp(b.1.slot.slot_abbr()))
+            }),
+            SortOrder::BySlot => result.sort_by(|a, b| {
+                a.1.slot
+                    .slot_abbr()
+                    .cmp(b.1.slot.slot_abbr())
+                    .then_with(|| a.1.name.cmp(&b.1.name))
+            }),
+        }
+        result
+    }
+
+    fn item_matches_filter(&self, item: &EquipmentItem) -> bool {
+        if let Some(slot) = self.selected_slot {
+            if item.slot != slot {
+                return false;
+            }
+        }
+        if !self.search.is_empty() {
+            let search_lower = self.search.to_lowercase();
+            if !item.name.to_lowercase().contains(&search_lower) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn build_flat_rows(&mut self) {
+        self.flat_rows_dirty = false;
+        self.cached_flat_rows.clear();
+
+        // 收集并排序套装
+        let mut sets_with_items: Vec<(usize, Vec<usize>)> = Vec::new();
+        for (set_idx, eq_set) in self.equipment_sets.iter().enumerate() {
+            let filtered: Vec<usize> = eq_set
+                .item_indices
+                .iter()
+                .copied()
+                .filter(|&i| self.item_matches_filter(&self.items[i]))
+                .collect();
+            if !filtered.is_empty() {
+                sets_with_items.push((set_idx, filtered));
+            }
+        }
+
+        // 按 sort_order 排序套装
+        match self.sort_order {
+            SortOrder::ByName => {
+                sets_with_items.sort_by(|a, b| {
+                    self.equipment_sets[a.0]
+                        .display_name
+                        .cmp(&self.equipment_sets[b.0].display_name)
+                });
+            }
+            SortOrder::BySetId => {
+                sets_with_items.sort_by(|a, b| {
+                    self.equipment_sets[a.0]
+                        .set_id
+                        .cmp(&self.equipment_sets[b.0].set_id)
+                });
+            }
+            SortOrder::BySlot => {
+                sets_with_items.sort_by(|a, b| {
+                    self.equipment_sets[a.0]
+                        .display_name
+                        .cmp(&self.equipment_sets[b.0].display_name)
+                });
+            }
+        }
+
+        for (set_idx, filtered_indices) in sets_with_items {
+            let eq_set = &self.equipment_sets[set_idx];
+            let expanded = self.expanded_sets.contains(&eq_set.set_id);
+            self.cached_flat_rows.push(FlatRow::GroupHeader {
+                set_id: eq_set.set_id,
+                display_name: eq_set.display_name.clone(),
+                item_count: filtered_indices.len(),
+                expanded,
+            });
+            if expanded {
+                for &global_idx in &filtered_indices {
+                    let item = &self.items[global_idx];
+                    self.cached_flat_rows.push(FlatRow::Item {
+                        global_idx,
+                        label: format!("[{}] {}", item.slot.slot_abbr(), item.name),
+                    });
+                }
+            }
+        }
     }
 
     /// 重新烘焙所有使用 ColorTable 的纹理（染色后调用）
@@ -160,16 +375,60 @@ impl eframe::App for App {
         egui::SidePanel::left("equipment_list")
             .default_width(350.0)
             .show(ctx, |ui| {
-                ui.heading("装备浏览器");
+                ui.horizontal(|ui| {
+                    ui.heading("装备浏览器");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .selectable_label(self.view_mode == ViewMode::SetGroup, "套装")
+                            .clicked()
+                        {
+                            self.view_mode = ViewMode::SetGroup;
+                            self.flat_rows_dirty = true;
+                            // 自动展开当前选中装备所在的套装
+                            if let Some(sel_idx) = self.selected_item {
+                                if let Some(item) = self.items.get(sel_idx) {
+                                    self.expanded_sets.insert(item.set_id);
+                                }
+                            }
+                        }
+                        if ui
+                            .selectable_label(self.view_mode == ViewMode::List, "列表")
+                            .clicked()
+                        {
+                            self.view_mode = ViewMode::List;
+                        }
+                    });
+                });
                 ui.separator();
 
                 // 搜索框
+                let prev_search = self.search.clone();
                 ui.horizontal(|ui| {
                     ui.label("搜索:");
                     ui.text_edit_singleline(&mut self.search);
                 });
+                if self.search != prev_search {
+                    self.flat_rows_dirty = true;
+                }
+
+                // 排序
+                let prev_sort = self.sort_order;
+                ui.horizontal(|ui| {
+                    ui.label("排序:");
+                    egui::ComboBox::from_id_salt("sort_order")
+                        .selected_text(self.sort_order.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.sort_order, SortOrder::ByName, SortOrder::ByName.label());
+                            ui.selectable_value(&mut self.sort_order, SortOrder::BySetId, SortOrder::BySetId.label());
+                            ui.selectable_value(&mut self.sort_order, SortOrder::BySlot, SortOrder::BySlot.label());
+                        });
+                });
+                if self.sort_order != prev_sort {
+                    self.flat_rows_dirty = true;
+                }
 
                 // 槽位过滤
+                let prev_slot = self.selected_slot;
                 ui.horizontal(|ui| {
                     if ui
                         .selectable_label(self.selected_slot.is_none(), "全部")
@@ -189,32 +448,137 @@ impl eframe::App for App {
                         }
                     }
                 });
+                if self.selected_slot != prev_slot {
+                    self.flat_rows_dirty = true;
+                }
 
                 ui.separator();
 
-                let filtered: Vec<(usize, String)> = self
-                    .filtered_items()
-                    .into_iter()
-                    .map(|(idx, item)| (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name)))
-                    .collect();
-                ui.label(format!("{} 件", filtered.len()));
+                match self.view_mode {
+                    ViewMode::List => {
+                        // ── 列表视图 ──
+                        let filtered: Vec<(usize, String)> = self
+                            .filtered_and_sorted_items()
+                            .into_iter()
+                            .map(|(idx, item)| {
+                                (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name))
+                            })
+                            .collect();
+                        ui.label(format!("{} 件", filtered.len()));
 
-                // 装备列表 (虚拟滚动)
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    18.0,
-                    filtered.len(),
-                    |ui, row_range| {
-                        for row_idx in row_range {
-                            if let Some((global_idx, label)) = filtered.get(row_idx) {
-                                let selected = self.selected_item == Some(*global_idx);
-                                if ui.selectable_label(selected, label).clicked() {
-                                    self.selected_item = Some(*global_idx);
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            18.0,
+                            filtered.len(),
+                            |ui, row_range| {
+                                for row_idx in row_range {
+                                    if let Some((global_idx, label)) = filtered.get(row_idx) {
+                                        let selected =
+                                            self.selected_item == Some(*global_idx);
+                                        if ui.selectable_label(selected, label).clicked() {
+                                            self.selected_item = Some(*global_idx);
+                                        }
+                                    }
                                 }
-                            }
+                            },
+                        );
+                    }
+                    ViewMode::SetGroup => {
+                        // ── 套装视图 ──
+                        if self.flat_rows_dirty {
+                            self.build_flat_rows();
                         }
-                    },
-                );
+                        let rows = self.cached_flat_rows.clone();
+                        let num_sets = rows
+                            .iter()
+                            .filter(|r| matches!(r, FlatRow::GroupHeader { .. }))
+                            .count();
+                        let num_items = rows
+                            .iter()
+                            .filter(|r| matches!(r, FlatRow::Item { .. }))
+                            .count();
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{} 组套装, {} 件装备", num_sets, num_items));
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("全部折叠").clicked() {
+                                        self.expanded_sets.clear();
+                                        self.flat_rows_dirty = true;
+                                    }
+                                    if ui.small_button("全部展开").clicked() {
+                                        for eq_set in &self.equipment_sets {
+                                            self.expanded_sets.insert(eq_set.set_id);
+                                        }
+                                        self.flat_rows_dirty = true;
+                                    }
+                                },
+                            );
+                        });
+
+                        let mut toggle_set: Option<u16> = None;
+                        let mut select_item: Option<usize> = None;
+
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            18.0,
+                            rows.len(),
+                            |ui, row_range| {
+                                for row_idx in row_range {
+                                    if let Some(row) = rows.get(row_idx) {
+                                        match row {
+                                            FlatRow::GroupHeader {
+                                                set_id,
+                                                display_name,
+                                                item_count,
+                                                expanded,
+                                            } => {
+                                                let arrow = if *expanded { "▼" } else { "▶" };
+                                                let text = format!(
+                                                    "{} {} ({}件) e{:04}",
+                                                    arrow, display_name, item_count, set_id
+                                                );
+                                                let resp = ui.selectable_label(
+                                                    false,
+                                                    egui::RichText::new(&text).strong(),
+                                                );
+                                                if resp.clicked() {
+                                                    toggle_set = Some(*set_id);
+                                                }
+                                            }
+                                            FlatRow::Item { global_idx, label } => {
+                                                ui.horizontal(|ui| {
+                                                    ui.add_space(16.0);
+                                                    let selected = self.selected_item
+                                                        == Some(*global_idx);
+                                                    if ui
+                                                        .selectable_label(selected, label)
+                                                        .clicked()
+                                                    {
+                                                        select_item = Some(*global_idx);
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                        );
+
+                        // 闭包外处理状态变更
+                        if let Some(sid) = toggle_set {
+                            if self.expanded_sets.contains(&sid) {
+                                self.expanded_sets.remove(&sid);
+                            } else {
+                                self.expanded_sets.insert(sid);
+                            }
+                            self.flat_rows_dirty = true;
+                        }
+                        if let Some(idx) = select_item {
+                            self.selected_item = Some(idx);
+                        }
+                    }
+                }
             });
 
         // 中央面板: 装备详情 + 3D 预览
@@ -240,6 +604,49 @@ impl eframe::App for App {
                         ui.label(item.model_path());
                         ui.end_row();
                     });
+
+                    // 同套装装备
+                    if let Some(&set_idx) = self.set_id_to_set_idx.get(&item.set_id) {
+                        let eq_set = &self.equipment_sets[set_idx];
+                        if eq_set.item_indices.len() > 1 {
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "同套装装备 ({})",
+                                    eq_set.display_name
+                                ))
+                                .strong(),
+                            );
+                            let sibling_indices: Vec<(usize, String, bool)> = eq_set
+                                .item_indices
+                                .iter()
+                                .map(|&i| {
+                                    let sib = &self.items[i];
+                                    let is_current = i == idx;
+                                    (
+                                        i,
+                                        format!("[{}] {}", sib.slot.slot_abbr(), sib.name),
+                                        is_current,
+                                    )
+                                })
+                                .collect();
+                            let mut clicked_sibling: Option<usize> = None;
+                            ui.horizontal_wrapped(|ui| {
+                                for (sib_idx, sib_label, is_current) in &sibling_indices {
+                                    if *is_current {
+                                        ui.label(
+                                            egui::RichText::new(sib_label).strong().underline(),
+                                        );
+                                    } else if ui.link(sib_label).clicked() {
+                                        clicked_sibling = Some(*sib_idx);
+                                    }
+                                }
+                            });
+                            if let Some(sib) = clicked_sibling {
+                                self.selected_item = Some(sib);
+                            }
+                        }
+                    }
 
                     ui.separator();
 

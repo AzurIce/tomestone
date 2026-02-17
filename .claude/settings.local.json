@@ -40,7 +40,9 @@
       "Bash(cargo test:*)",
       "Bash(git stash:*)",
       "WebFetch(domain:xivapi.com)",
-      "mcp__imhex-pattern-doc__searchDocumentation"
+      "mcp__imhex-pattern-doc__searchDocumentation",
+      "Bash(grep:*)",
+      "Bash(xxd:*)"
     ],
     "additionalDirectories": [
       "E:\\_ff14"

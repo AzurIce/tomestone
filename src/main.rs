@@ -9,7 +9,7 @@ use std::path::Path;
 
 use eframe::egui;
 use egui_wgpu::wgpu;
-use game_data::{EquipSlot, EquipmentItem, GameData, StainEntry};
+use game_data::{EquipSlot, EquipmentItem, GameData, StainEntry, SHADE_ORDER, shade_group_name};
 use mdl_loader::BoundingBox;
 use physis::stm::StainingTemplate;
 use renderer::{Camera, ModelRenderer};
@@ -147,7 +147,10 @@ struct App {
     // 染色系统
     stains: Vec<StainEntry>,
     stm: Option<StainingTemplate>,
-    selected_stain_id: u32,
+    selected_stain_ids: [u32; 2],
+    active_dye_channel: usize,
+    selected_shade: u8,
+    is_dual_dye: bool,
     needs_rebake: bool,
 }
 
@@ -189,7 +192,10 @@ impl App {
             cached_meshes: Vec::new(),
             stains,
             stm,
-            selected_stain_id: 0,
+            selected_stain_ids: [0, 0],
+            active_dye_channel: 0,
+            selected_shade: 2,
+            is_dual_dye: false,
             needs_rebake: false,
         }
     }
@@ -327,13 +333,13 @@ impl App {
                     if let (Some(color_table), Some(id_tex)) =
                         (&cached.color_table, &cached.id_texture)
                     {
-                        let dyed_colors = if self.selected_stain_id > 0 {
+                        let dyed_colors = if self.selected_stain_ids[0] > 0 || self.selected_stain_ids[1] > 0 {
                             if let Some(dye_table) = &cached.color_dye_table {
                                 Some(dye::apply_dye(
                                     color_table,
                                     dye_table,
                                     stm,
-                                    self.selected_stain_id,
+                                    self.selected_stain_ids,
                                 ))
                             } else {
                                 None
@@ -650,29 +656,27 @@ impl eframe::App for App {
 
                     ui.separator();
 
-                    // 染料选择器
+                    // 染料选择器 (临时 — Commit 2 将替换为调色板 UI)
                     let has_dyeable = self.cached_materials.values().any(|m| m.uses_color_table);
                     if has_dyeable {
                         ui.horizontal(|ui| {
                             ui.label("染料:");
-                            let prev_stain = self.selected_stain_id;
-                            let current_label = if self.selected_stain_id == 0 {
+                            let prev_stains = self.selected_stain_ids;
+                            let current_label = if self.selected_stain_ids[0] == 0 {
                                 "无染料".to_string()
                             } else {
                                 self.stains
                                     .iter()
-                                    .find(|s| s.id == self.selected_stain_id)
+                                    .find(|s| s.id == self.selected_stain_ids[0])
                                     .map(|s| s.name.clone())
-                                    .unwrap_or_else(|| format!("染料 #{}", self.selected_stain_id))
+                                    .unwrap_or_else(|| format!("染料 #{}", self.selected_stain_ids[0]))
                             };
                             egui::ComboBox::from_id_salt("dye_selector")
                                 .selected_text(&current_label)
                                 .width(200.0)
                                 .show_ui(ui, |ui| {
-                                    // 无染料选项
-                                    ui.selectable_value(&mut self.selected_stain_id, 0, "无染料");
+                                    ui.selectable_value(&mut self.selected_stain_ids[0], 0, "无染料");
                                     ui.separator();
-                                    // 染料列表
                                     for stain in &self.stains {
                                         let color = egui::Color32::from_rgb(
                                             stain.color[0],
@@ -680,16 +684,14 @@ impl eframe::App for App {
                                             stain.color[2],
                                         );
                                         ui.horizontal(|ui| {
-                                            // 色块预览
                                             let (rect, _) = ui.allocate_exact_size(
                                                 egui::vec2(14.0, 14.0),
                                                 egui::Sense::hover(),
                                             );
                                             ui.painter().rect_filled(rect, 2.0, color);
-                                            // 染料名
                                             if ui
                                                 .selectable_value(
-                                                    &mut self.selected_stain_id,
+                                                    &mut self.selected_stain_ids[0],
                                                     stain.id,
                                                     &stain.name,
                                                 )
@@ -698,22 +700,7 @@ impl eframe::App for App {
                                         });
                                     }
                                 });
-                            // 当前色块
-                            if self.selected_stain_id > 0 {
-                                if let Some(stain) = self.stains.iter().find(|s| s.id == self.selected_stain_id) {
-                                    let color = egui::Color32::from_rgb(
-                                        stain.color[0],
-                                        stain.color[1],
-                                        stain.color[2],
-                                    );
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(20.0, 20.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(rect, 3.0, color);
-                                }
-                            }
-                            if self.selected_stain_id != prev_stain {
+                            if prev_stains != self.selected_stain_ids {
                                 self.needs_rebake = true;
                             }
                         });
@@ -724,7 +711,7 @@ impl eframe::App for App {
                     // 加载模型 (选中新装备时)
                     if self.loaded_model_idx != Some(idx) {
                         self.loaded_model_idx = Some(idx);
-                        self.selected_stain_id = 0; // 重置染料选择
+                        self.selected_stain_ids = [0, 0]; // 重置染料选择
                         let paths = item.model_paths();
                         match mdl_loader::load_mdl_with_fallback(&self.game, &paths) {
                             Ok(result) if !result.meshes.is_empty() => {

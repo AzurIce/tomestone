@@ -342,3 +342,22 @@ impl GameData {
         })
     }
 }
+
+/// Shade 组显示顺序
+pub const SHADE_ORDER: &[u8] = &[2, 4, 5, 6, 7, 8, 9, 10, 1];
+
+/// shade 值 → 中文组名
+pub fn shade_group_name(shade: u8) -> &'static str {
+    match shade {
+        2 => "白/灰/黑",
+        4 => "红/粉",
+        5 => "橙/棕",
+        6 => "黄",
+        7 => "绿",
+        8 => "蓝",
+        9 => "紫",
+        10 => "特殊",
+        1 => "其他",
+        _ => "未知",
+    }
+}

@@ -784,7 +784,8 @@ impl eframe::App for App {
                     // 加载模型 (选中新装备时)
                     if self.loaded_model_idx != Some(idx) {
                         self.loaded_model_idx = Some(idx);
-                        self.selected_stain_ids = [0, 0]; // 重置染料选择
+                        self.selected_stain_ids = [0, 0];
+                        self.active_dye_channel = 0;
                         let paths = item.model_paths();
                         match mdl_loader::load_mdl_with_fallback(&self.game, &paths) {
                             Ok(result) if !result.meshes.is_empty() => {
@@ -804,6 +805,7 @@ impl eframe::App for App {
                                     &load_result.mesh_textures,
                                 );
                                 self.cached_materials = load_result.materials;
+                                self.is_dual_dye = dye::has_dual_dye(&self.cached_materials);
                                 self.cached_meshes = result.meshes.clone();
                                 self.camera.focus_on(&bbox);
                                 self.last_bbox = Some(bbox);

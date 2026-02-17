@@ -656,54 +656,127 @@ impl eframe::App for App {
 
                     ui.separator();
 
-                    // 染料选择器 (临时 — Commit 2 将替换为调色板 UI)
+                    // 染料调色板
                     let has_dyeable = self.cached_materials.values().any(|m| m.uses_color_table);
                     if has_dyeable {
-                        ui.horizontal(|ui| {
-                            ui.label("染料:");
-                            let prev_stains = self.selected_stain_ids;
-                            let current_label = if self.selected_stain_ids[0] == 0 {
-                                "无染料".to_string()
-                            } else {
-                                self.stains
-                                    .iter()
-                                    .find(|s| s.id == self.selected_stain_ids[0])
-                                    .map(|s| s.name.clone())
-                                    .unwrap_or_else(|| format!("染料 #{}", self.selected_stain_ids[0]))
-                            };
-                            egui::ComboBox::from_id_salt("dye_selector")
-                                .selected_text(&current_label)
-                                .width(200.0)
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.selected_stain_ids[0], 0, "无染料");
-                                    ui.separator();
-                                    for stain in &self.stains {
-                                        let color = egui::Color32::from_rgb(
-                                            stain.color[0],
-                                            stain.color[1],
-                                            stain.color[2],
-                                        );
-                                        ui.horizontal(|ui| {
-                                            let (rect, _) = ui.allocate_exact_size(
-                                                egui::vec2(14.0, 14.0),
-                                                egui::Sense::hover(),
-                                            );
-                                            ui.painter().rect_filled(rect, 2.0, color);
-                                            if ui
-                                                .selectable_value(
-                                                    &mut self.selected_stain_ids[0],
-                                                    stain.id,
-                                                    &stain.name,
-                                                )
-                                                .clicked()
-                                            {}
-                                        });
-                                    }
-                                });
-                            if prev_stains != self.selected_stain_ids {
-                                self.needs_rebake = true;
+                        let prev_stains = self.selected_stain_ids;
+
+                        // 收集当前 shade 组的染料数据（避免借用冲突）
+                        let stain_data: Vec<(u32, String, [u8; 3])> = self
+                            .stains
+                            .iter()
+                            .filter(|s| s.shade == self.selected_shade)
+                            .map(|s| (s.id, s.name.clone(), s.color))
+                            .collect();
+
+                        let ch = self.active_dye_channel;
+
+                        // 通道 Tab（仅双染色装备显示）
+                        if self.is_dual_dye {
+                            ui.horizontal(|ui| {
+                                ui.label("通道:");
+                                ui.selectable_value(&mut self.active_dye_channel, 0, "通道1");
+                                ui.selectable_value(&mut self.active_dye_channel, 1, "通道2");
+                            });
+                        }
+
+                        // Shade 组选择（横排按钮）
+                        ui.horizontal_wrapped(|ui| {
+                            for &shade in SHADE_ORDER {
+                                let label = shade_group_name(shade);
+                                if ui
+                                    .selectable_label(self.selected_shade == shade, label)
+                                    .clicked()
+                                {
+                                    self.selected_shade = shade;
+                                }
                             }
                         });
+
+                        // 色块网格
+                        ui.horizontal_wrapped(|ui| {
+                            // "无染料" 按钮
+                            let no_dye_selected = self.selected_stain_ids[ch] == 0;
+                            let (no_rect, no_resp) = ui.allocate_exact_size(
+                                egui::vec2(20.0, 20.0),
+                                egui::Sense::click(),
+                            );
+                            let no_bg = if no_dye_selected {
+                                egui::Color32::from_gray(180)
+                            } else {
+                                egui::Color32::from_gray(60)
+                            };
+                            ui.painter().rect_filled(no_rect, 2.0, no_bg);
+                            ui.painter().text(
+                                no_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "✕",
+                                egui::FontId::proportional(12.0),
+                                egui::Color32::WHITE,
+                            );
+                            if no_dye_selected {
+                                ui.painter().rect_stroke(
+                                    no_rect,
+                                    2.0,
+                                    egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                    egui::StrokeKind::Outside,
+                                );
+                            }
+                            if no_resp.clicked() {
+                                self.selected_stain_ids[ch] = 0;
+                            }
+                            no_resp.on_hover_text("无染料");
+
+                            // 当前 shade 组的色块
+                            for (id, name, color_rgb) in &stain_data {
+                                let color =
+                                    egui::Color32::from_rgb(color_rgb[0], color_rgb[1], color_rgb[2]);
+                                let selected = self.selected_stain_ids[ch] == *id;
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(20.0, 20.0),
+                                    egui::Sense::click(),
+                                );
+                                ui.painter().rect_filled(rect, 2.0, color);
+                                if selected {
+                                    ui.painter().rect_stroke(
+                                        rect,
+                                        2.0,
+                                        egui::Stroke::new(2.0, egui::Color32::WHITE),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                if resp.clicked() {
+                                    self.selected_stain_ids[ch] = *id;
+                                }
+                                resp.on_hover_text(name);
+                            }
+                        });
+
+                        // 当前选择显示
+                        ui.horizontal(|ui| {
+                            let current_id = self.selected_stain_ids[ch];
+                            if current_id == 0 {
+                                ui.label("当前: 无染料");
+                            } else if let Some(stain) =
+                                self.stains.iter().find(|s| s.id == current_id)
+                            {
+                                let color = egui::Color32::from_rgb(
+                                    stain.color[0],
+                                    stain.color[1],
+                                    stain.color[2],
+                                );
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(16.0, 16.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(rect, 2.0, color);
+                                ui.label(format!("当前: {}", stain.name));
+                            }
+                        });
+
+                        if prev_stains != self.selected_stain_ids {
+                            self.needs_rebake = true;
+                        }
                     }
 
                     // 染色重烘焙 (标记在下方 UI 中设置，延迟到下一帧执行)

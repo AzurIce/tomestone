@@ -7,14 +7,13 @@ use physis::resource::{Resource as _, SqPackResource};
 use physis::stm::StainingTemplate;
 use physis::Language;
 
-use crate::tex_loader::TextureData;
+use tomestone_render::TextureData;
 
 /// 解析后的完整材质数据
 pub struct ParsedMaterial {
     pub texture_paths: Vec<String>,
     pub color_table: Option<ColorTable>,
     pub color_dye_table: Option<ColorDyeTable>,
-    pub shader_package_name: String,
 }
 
 /// 装备槽位
@@ -65,7 +64,6 @@ impl EquipSlot {
 pub struct EquipmentItem {
     pub row_id: u32,
     pub name: String,
-    pub icon_id: u16,
     pub slot: EquipSlot,
     pub set_id: u16,
     pub variant_id: u16,
@@ -86,7 +84,10 @@ impl EquipmentItem {
     pub fn model_path_for_race(&self, race_code: &str) -> String {
         format!(
             "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
-            self.set_id, race_code, self.set_id, self.slot.slot_abbr()
+            self.set_id,
+            race_code,
+            self.set_id,
+            self.slot.slot_abbr()
         )
     }
 
@@ -99,7 +100,10 @@ impl EquipmentItem {
             .map(|rc| {
                 format!(
                     "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
-                    self.set_id, rc, self.set_id, self.slot.slot_abbr()
+                    self.set_id,
+                    rc,
+                    self.set_id,
+                    self.slot.slot_abbr()
                 )
             })
             .collect()
@@ -129,7 +133,6 @@ pub const RACE_CODES: &[&str] = &[
 
 // Item 表列索引 (通过 column inspector 确定)
 const COL_NAME: usize = 0;
-const COL_ICON: usize = 10;
 const COL_EQUIP_SLOT_CATEGORY: usize = 17;
 const COL_MODEL_MAIN: usize = 47;
 
@@ -140,7 +143,6 @@ pub struct StainEntry {
     pub name: String,
     pub color: [u8; 3],
     pub shade: u8,
-    pub is_metallic: bool,
 }
 
 /// 游戏数据访问层
@@ -180,7 +182,6 @@ impl GameData {
             texture_paths: mtrl.texture_paths,
             color_table: mtrl.color_table,
             color_dye_table: mtrl.color_dye_table,
-            shader_package_name: mtrl.shader_package_name,
         })
     }
 
@@ -191,10 +192,7 @@ impl GameData {
             .borrow_mut()
             .parsed("chara/base_material/stainingtemplate.stm")
             .ok()?;
-        println!(
-            "STM 加载成功: {} 个模板",
-            stm.entries.len()
-        );
+        println!("STM 加载成功: {} 个模板", stm.entries.len());
         Some(stm)
     }
 
@@ -293,22 +291,24 @@ impl GameData {
         };
 
         // Name: 尝试 Col 2 和 Col 3（不同版本列序可能不同）
-        let name = row.columns.iter().find_map(|col| {
-            if let Field::String(s) = col {
-                if !s.is_empty() { return Some(s.clone()); }
-            }
-            None
-        }).unwrap_or_default();
-
-        // IsMetallic: 查找第一个 Bool 列
-        let is_metallic = row.columns.iter().any(|col| matches!(col, Field::Bool(true)));
+        let name = row
+            .columns
+            .iter()
+            .find_map(|col| {
+                if let Field::String(s) = col {
+                    if !s.is_empty() {
+                        return Some(s.clone());
+                    }
+                }
+                None
+            })
+            .unwrap_or_default();
 
         Some(StainEntry {
             id: row_id,
             name,
             color,
             shade,
-            is_metallic,
         })
     }
 
@@ -345,16 +345,9 @@ impl GameData {
             _ => return None,
         };
 
-        // 读取图标
-        let icon_id = match row.columns.get(COL_ICON) {
-            Some(Field::UInt16(v)) => *v,
-            _ => 0,
-        };
-
         Some(EquipmentItem {
             row_id,
             name,
-            icon_id,
             slot,
             set_id,
             variant_id,

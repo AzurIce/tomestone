@@ -1,12 +1,7 @@
 use crate::game_data::GameData;
 use crate::mdl_loader::MeshData;
 use physis::mtrl::{ColorDyeTable, ColorTable};
-
-pub struct TextureData {
-    pub rgba: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
-}
+use tomestone_render::{MeshTextures, TextureData};
 
 /// 拼接完整的材质路径
 fn resolve_material_path(short_name: &str, set_id: u16, variant_id: u16) -> String {
@@ -44,18 +39,13 @@ fn linear_to_srgb(c: f32) -> f32 {
 
 /// 从纹理路径列表中查找 _id.tex 路径
 fn find_id_texture_path(texture_paths: &[String]) -> Option<String> {
-    texture_paths
-        .iter()
-        .find(|p| p.contains("_id."))
-        .cloned()
+    texture_paths.iter().find(|p| p.contains("_id.")).cloned()
 }
 
 /// 从 ColorTable 提取每行的 diffuse 颜色 (linear RGB)
 fn extract_diffuse_colors(color_table: &ColorTable) -> Vec<[f32; 3]> {
     match color_table {
-        ColorTable::LegacyColorTable(data) => {
-            data.rows.iter().map(|r| r.diffuse_color).collect()
-        }
+        ColorTable::LegacyColorTable(data) => data.rows.iter().map(|r| r.diffuse_color).collect(),
         ColorTable::DawntrailColorTable(data) => {
             data.rows.iter().map(|r| r.diffuse_color).collect()
         }
@@ -126,7 +116,12 @@ pub fn bake_color_table_texture(
 
 /// 加载材质的全部纹理 (diffuse + normal + mask + emissive)
 /// 返回 (MeshTextures, CachedMaterial)
-fn load_material_textures(game: &GameData, short_name: &str, set_id: u16, variant_id: u16) -> Option<(MeshTextures, CachedMaterial)> {
+fn load_material_textures(
+    game: &GameData,
+    short_name: &str,
+    set_id: u16,
+    variant_id: u16,
+) -> Option<(MeshTextures, CachedMaterial)> {
     let candidates: Vec<String> = if variant_id != 1 {
         vec![
             resolve_material_path(short_name, set_id, variant_id),
@@ -188,7 +183,11 @@ fn load_material_textures(game: &GameData, short_name: &str, set_id: u16, varian
                             let baked = bake_color_table_texture(&id_tex, color_table, None);
                             let emissive = bake_emissive_texture(&id_tex, color_table);
                             // 仅当 emissive 不是 1x1 黑色时才保留
-                            let emissive_opt = if emissive.width > 1 { Some(emissive) } else { None };
+                            let emissive_opt = if emissive.width > 1 {
+                                Some(emissive)
+                            } else {
+                                None
+                            };
                             println!("    烘焙成功: {}x{}", baked.width, baked.height);
                             let cached = CachedMaterial {
                                 color_table: material.color_table,
@@ -230,7 +229,10 @@ fn find_diffuse_path(texture_paths: &[String]) -> Option<String> {
         return Some(p.clone());
     }
     // 回退: 第一个非法线非 mask 的有效纹理
-    if let Some(p) = texture_paths.iter().find(|p| !is_non_diffuse_texture(p) && !p.is_empty() && !is_placeholder_path(p)) {
+    if let Some(p) = texture_paths
+        .iter()
+        .find(|p| !is_non_diffuse_texture(p) && !p.is_empty() && !is_placeholder_path(p))
+    {
         println!("    回退非法线纹理: {}", p);
         return Some(p.clone());
     }
@@ -270,9 +272,7 @@ fn find_mask_path(texture_paths: &[String]) -> Option<String> {
 /// 从 ColorTable 提取每行的 emissive 颜色 (linear RGB)
 fn extract_emissive_colors(color_table: &ColorTable) -> Vec<[f32; 3]> {
     match color_table {
-        ColorTable::LegacyColorTable(data) => {
-            data.rows.iter().map(|r| r.emissive_color).collect()
-        }
+        ColorTable::LegacyColorTable(data) => data.rows.iter().map(|r| r.emissive_color).collect(),
         ColorTable::DawntrailColorTable(data) => {
             data.rows.iter().map(|r| r.emissive_color).collect()
         }
@@ -291,10 +291,16 @@ pub fn bake_emissive_texture(id_tex: &TextureData, color_table: &ColorTable) -> 
     let emissive_colors = extract_emissive_colors(color_table);
 
     // 检查是否有非零 emissive
-    let has_emissive = emissive_colors.iter().any(|c| c[0] > 0.001 || c[1] > 0.001 || c[2] > 0.001);
+    let has_emissive = emissive_colors
+        .iter()
+        .any(|c| c[0] > 0.001 || c[1] > 0.001 || c[2] > 0.001);
     if !has_emissive {
         // 全黑 1x1 占位
-        return TextureData { rgba: vec![0, 0, 0, 255], width: 1, height: 1 };
+        return TextureData {
+            rgba: vec![0, 0, 0, 255],
+            width: 1,
+            height: 1,
+        };
     }
 
     let pixel_count = (id_tex.width * id_tex.height) as usize;
@@ -322,7 +328,11 @@ pub fn bake_emissive_texture(id_tex: &TextureData, color_table: &ColorTable) -> 
         rgba.push(255);
     }
 
-    TextureData { rgba, width: id_tex.width, height: id_tex.height }
+    TextureData {
+        rgba,
+        width: id_tex.width,
+        height: id_tex.height,
+    }
 }
 
 /// 1x1 白色回退纹理
@@ -343,14 +353,6 @@ pub struct CachedMaterial {
     pub uses_color_table: bool,
 }
 
-/// 单个 mesh 的全部纹理数据
-pub struct MeshTextures {
-    pub diffuse: TextureData,
-    pub normal: Option<TextureData>,
-    pub mask: Option<TextureData>,
-    pub emissive: Option<TextureData>,
-}
-
 /// 材质加载结果，包含纹理和缓存数据
 pub struct MaterialLoadResult {
     pub mesh_textures: Vec<MeshTextures>,
@@ -367,8 +369,10 @@ pub fn load_mesh_textures(
     variant_id: u16,
 ) -> MaterialLoadResult {
     // 缓存已加载的材质索引 -> MeshTextures
-    let mut tex_cache: std::collections::HashMap<u16, MeshTextures> = std::collections::HashMap::new();
-    let mut mat_cache: std::collections::HashMap<u16, CachedMaterial> = std::collections::HashMap::new();
+    let mut tex_cache: std::collections::HashMap<u16, MeshTextures> =
+        std::collections::HashMap::new();
+    let mut mat_cache: std::collections::HashMap<u16, CachedMaterial> =
+        std::collections::HashMap::new();
 
     let mut mesh_textures = Vec::with_capacity(meshes.len());
     for mesh in meshes {
@@ -378,19 +382,44 @@ pub fn load_mesh_textures(
                 println!("  材质 [{}]: {}", mat_idx, name);
                 match load_material_textures(game, name, set_id, variant_id) {
                     Some((mt, cm)) => {
-                        println!("    纹理加载成功: {}x{} normal={} mask={} emissive={}",
-                            mt.diffuse.width, mt.diffuse.height,
-                            mt.normal.is_some(), mt.mask.is_some(), mt.emissive.is_some());
+                        println!(
+                            "    纹理加载成功: {}x{} normal={} mask={} emissive={}",
+                            mt.diffuse.width,
+                            mt.diffuse.height,
+                            mt.normal.is_some(),
+                            mt.mask.is_some(),
+                            mt.emissive.is_some()
+                        );
                         (mt, Some(cm))
                     }
                     None => {
                         println!("    纹理加载失败，使用白色回退");
-                        (MeshTextures { diffuse: fallback_white(), normal: None, mask: None, emissive: None }, None)
+                        (
+                            MeshTextures {
+                                diffuse: fallback_white(),
+                                normal: None,
+                                mask: None,
+                                emissive: None,
+                            },
+                            None,
+                        )
                     }
                 }
             } else {
-                println!("  材质索引 {} 超出范围 (共 {} 个材质名)，使用白色回退", mat_idx, material_names.len());
-                (MeshTextures { diffuse: fallback_white(), normal: None, mask: None, emissive: None }, None)
+                println!(
+                    "  材质索引 {} 超出范围 (共 {} 个材质名)，使用白色回退",
+                    mat_idx,
+                    material_names.len()
+                );
+                (
+                    MeshTextures {
+                        diffuse: fallback_white(),
+                        normal: None,
+                        mask: None,
+                        emissive: None,
+                    },
+                    None,
+                )
             };
             tex_cache.insert(mat_idx, mtex);
             if let Some(cm) = cached_mat {

@@ -5,12 +5,13 @@ use eframe::egui;
 use egui_wgpu::wgpu;
 use physis::stm::StainingTemplate;
 
-use crate::game_data::{EquipSlot, EquipmentItem, GameData, StainEntry, SHADE_ORDER, RACE_CODES, shade_group_name};
+use crate::game_data::{
+    shade_group_name, EquipSlot, EquipmentItem, GameData, StainEntry, RACE_CODES, SHADE_ORDER,
+};
 use crate::glamour::GlamourSet;
-use crate::mdl_loader::BoundingBox;
-use crate::renderer::{Camera, ModelRenderer};
 use crate::tex_loader::CachedMaterial;
-use crate::{ALL_SLOTS, EquipmentSet, SortOrder};
+use crate::{EquipmentSet, SortOrder, ALL_SLOTS};
+use tomestone_render::{BoundingBox, Camera, ModelRenderer};
 
 /// 聚合只读引用，减少参数数量
 pub struct AppContext<'a> {
@@ -87,7 +88,8 @@ impl GlamourEditor {
         // 从 glamour_set 中恢复每个槽位的染色状态
         let mut selected_stain_ids = HashMap::new();
         for slot in &ALL_SLOTS {
-            let stain_ids = glamour_set.get_slot(*slot)
+            let stain_ids = glamour_set
+                .get_slot(*slot)
                 .map(|gs| gs.stain_ids)
                 .unwrap_or([0, 0]);
             selected_stain_ids.insert(*slot, stain_ids);
@@ -124,9 +126,11 @@ impl GlamourEditor {
         self.needs_mesh_rebuild = false;
 
         // 收集所有有装备的槽位对应的 EquipmentItem
-        let equipped_items: Vec<(EquipSlot, &EquipmentItem)> = ALL_SLOTS.iter()
+        let equipped_items: Vec<(EquipSlot, &EquipmentItem)> = ALL_SLOTS
+            .iter()
             .filter_map(|slot| {
-                self.glamour_set.get_slot(*slot)
+                self.glamour_set
+                    .get_slot(*slot)
                     .and_then(|gs| item_id_map.get(&gs.item_id))
                     .and_then(|&idx| items.get(idx))
                     .map(|item| (*slot, item))
@@ -152,7 +156,7 @@ impl GlamourEditor {
         };
 
         let mut all_meshes: Vec<crate::mdl_loader::MeshData> = Vec::new();
-        let mut all_textures: Vec<crate::tex_loader::MeshTextures> = Vec::new();
+        let mut all_textures: Vec<tomestone_render::MeshTextures> = Vec::new();
 
         for slot in &ALL_SLOTS {
             let state = self.slot_states.entry(*slot).or_default();
@@ -181,32 +185,39 @@ impl GlamourEditor {
 
             // 优先用统一种族码加载，跟踪实际使用的种族码
             let unified_path = item.model_path_for_race(unified_race);
-            let (load_result_mdl, actual_race) = match crate::mdl_loader::load_mdl(game, &unified_path) {
-                Ok(result) if !result.meshes.is_empty() => (Some(result), unified_race.to_string()),
-                _ => {
-                    // 回退: 逐个种族码尝试
-                    let mut found = (None, String::new());
-                    for &rc in RACE_CODES {
-                        let path = item.model_path_for_race(rc);
-                        if let Ok(result) = crate::mdl_loader::load_mdl(game, &path) {
-                            if !result.meshes.is_empty() {
-                                found = (Some(result), rc.to_string());
-                                break;
+            let (load_result_mdl, actual_race) =
+                match crate::mdl_loader::load_mdl(game, &unified_path) {
+                    Ok(result) if !result.meshes.is_empty() => {
+                        (Some(result), unified_race.to_string())
+                    }
+                    _ => {
+                        // 回退: 逐个种族码尝试
+                        let mut found = (None, String::new());
+                        for &rc in RACE_CODES {
+                            let path = item.model_path_for_race(rc);
+                            if let Ok(result) = crate::mdl_loader::load_mdl(game, &path) {
+                                if !result.meshes.is_empty() {
+                                    found = (Some(result), rc.to_string());
+                                    break;
+                                }
                             }
                         }
+                        found
                     }
-                    found
-                }
-            };
+                };
 
             match load_result_mdl {
                 Some(mut result) if !result.meshes.is_empty() => {
                     // 当实际种族码与统一种族码不同时，应用 CPU 蒙皮
                     if actual_race != unified_race {
-                        if let Some(target_bind) = self.skeleton_cache.get_bind_pose(unified_race, game) {
+                        if let Some(target_bind) =
+                            self.skeleton_cache.get_bind_pose(unified_race, game)
+                        {
                             // 需要 clone 因为 get_bind_pose 借用了 self
                             let target_bind = target_bind.clone();
-                            if let Some(source_bind) = self.skeleton_cache.get_bind_pose(&actual_race, game) {
+                            if let Some(source_bind) =
+                                self.skeleton_cache.get_bind_pose(&actual_race, game)
+                            {
                                 let source_bind = source_bind.clone();
                                 crate::skeleton::apply_skinning(
                                     &mut result.meshes,
@@ -245,10 +256,14 @@ impl GlamourEditor {
         }
 
         // 全量上传
+        let geometry: Vec<(&[tomestone_render::Vertex], &[u16])> = all_meshes
+            .iter()
+            .map(|m| (m.vertices.as_slice(), m.indices.as_slice()))
+            .collect();
         self.model_renderer.set_mesh_data(
             &self.render_state.device,
             &self.render_state.queue,
-            &all_meshes,
+            &geometry,
             &all_textures,
         );
 
@@ -269,7 +284,11 @@ impl GlamourEditor {
 
     /// 重烘焙单个槽位的染色纹理
     fn rebake_slot_textures(&mut self, slot: EquipSlot, stm: &StainingTemplate) {
-        let stain_ids = self.selected_stain_ids.get(&slot).copied().unwrap_or([0, 0]);
+        let stain_ids = self
+            .selected_stain_ids
+            .get(&slot)
+            .copied()
+            .unwrap_or([0, 0]);
         let total_meshes = self.model_renderer.mesh_count();
 
         let state = match self.slot_states.get(&slot) {
@@ -281,7 +300,7 @@ impl GlamourEditor {
             return;
         }
 
-        let mut new_textures: Vec<Option<crate::tex_loader::TextureData>> =
+        let mut new_textures: Vec<Option<tomestone_render::TextureData>> =
             (0..total_meshes).map(|_| None).collect();
 
         for (local_idx, mesh) in state.cached_meshes.iter().enumerate() {
@@ -298,7 +317,12 @@ impl GlamourEditor {
                     {
                         let dyed_colors = if stain_ids[0] > 0 || stain_ids[1] > 0 {
                             if let Some(dye_table) = &cached.color_dye_table {
-                                Some(crate::dye::apply_dye(color_table, dye_table, stm, stain_ids))
+                                Some(crate::dye::apply_dye(
+                                    color_table,
+                                    dye_table,
+                                    stm,
+                                    stain_ids,
+                                ))
                             } else {
                                 None
                             }
@@ -324,11 +348,7 @@ impl GlamourEditor {
     }
 
     /// 主 UI，返回编辑器动作
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        app: &AppContext<'_>,
-    ) -> GlamourEditorAction {
+    pub fn show(&mut self, ctx: &egui::Context, app: &AppContext<'_>) -> GlamourEditorAction {
         // 在 UI 之前执行重建
         if self.needs_mesh_rebuild {
             self.rebuild_merged_meshes(app.items, app.item_id_map, app.game);
@@ -365,8 +385,16 @@ impl GlamourEditor {
                     egui::ComboBox::from_id_salt("glamour_sort_order")
                         .selected_text(self.sort_order.label())
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.sort_order, SortOrder::ByName, SortOrder::ByName.label());
-                            ui.selectable_value(&mut self.sort_order, SortOrder::BySetId, SortOrder::BySetId.label());
+                            ui.selectable_value(
+                                &mut self.sort_order,
+                                SortOrder::ByName,
+                                SortOrder::ByName.label(),
+                            );
+                            ui.selectable_value(
+                                &mut self.sort_order,
+                                SortOrder::BySetId,
+                                SortOrder::BySetId.label(),
+                            );
                         });
                 });
 
@@ -374,10 +402,14 @@ impl GlamourEditor {
 
                 let slot = self.active_slot;
                 let search_lower = self.search.to_lowercase();
-                let mut filtered: Vec<(usize, &EquipmentItem)> = app.items.iter().enumerate()
+                let mut filtered: Vec<(usize, &EquipmentItem)> = app
+                    .items
+                    .iter()
+                    .enumerate()
                     .filter(|(_, item)| {
                         item.slot == slot
-                            && (search_lower.is_empty() || item.name.to_lowercase().contains(&search_lower))
+                            && (search_lower.is_empty()
+                                || item.name.to_lowercase().contains(&search_lower))
                     })
                     .collect();
                 match self.sort_order {
@@ -442,20 +474,30 @@ impl GlamourEditor {
 
                                     // 预计算兄弟装备数据
                                     let siblings: Vec<(usize, String, EquipSlot, bool)> = eq_set
-                                        .item_indices.iter()
-                                        .filter_map(|&i| app.items.get(i).map(|sib| {
-                                            let is_current = i == idx;
-                                            let label = format!("[{}] {}", sib.slot.slot_abbr(), sib.name);
-                                            (i, label, sib.slot, is_current)
-                                        }))
+                                        .item_indices
+                                        .iter()
+                                        .filter_map(|&i| {
+                                            app.items.get(i).map(|sib| {
+                                                let is_current = i == idx;
+                                                let label = format!(
+                                                    "[{}] {}",
+                                                    sib.slot.slot_abbr(),
+                                                    sib.name
+                                                );
+                                                (i, label, sib.slot, is_current)
+                                            })
+                                        })
                                         .collect();
 
                                     let mut clicked_sibling: Option<(usize, EquipSlot)> = None;
                                     ui.horizontal_wrapped(|ui| {
-                                        for (sib_idx, sib_label, sib_slot, is_current) in &siblings {
+                                        for (sib_idx, sib_label, sib_slot, is_current) in &siblings
+                                        {
                                             if *is_current {
                                                 ui.label(
-                                                    egui::RichText::new(sib_label).strong().underline(),
+                                                    egui::RichText::new(sib_label)
+                                                        .strong()
+                                                        .underline(),
                                                 );
                                             } else if ui.link(sib_label).clicked() {
                                                 clicked_sibling = Some((*sib_idx, *sib_slot));
@@ -476,8 +518,11 @@ impl GlamourEditor {
                                             if let Some(sib_item) = app.items.get(sib_idx) {
                                                 let sib_slot = sib_item.slot;
                                                 if self.glamour_set.get_slot(sib_slot).is_none() {
-                                                    let stain_ids = self.selected_stain_ids
-                                                        .get(&sib_slot).copied().unwrap_or([0, 0]);
+                                                    let stain_ids = self
+                                                        .selected_stain_ids
+                                                        .get(&sib_slot)
+                                                        .copied()
+                                                        .unwrap_or([0, 0]);
                                                     self.glamour_set.set_slot(
                                                         sib_slot,
                                                         sib_item.row_id,
@@ -495,36 +540,56 @@ impl GlamourEditor {
                             ui.separator();
 
                             // 染色 UI
-                            let has_dyeable = self.slot_states.get(&slot)
+                            let has_dyeable = self
+                                .slot_states
+                                .get(&slot)
                                 .map(|s| s.cached_materials.values().any(|m| m.uses_color_table))
                                 .unwrap_or(false);
 
                             if has_dyeable {
-                                let slot_stains = self.selected_stain_ids.get(&slot).copied().unwrap_or([0, 0]);
+                                let slot_stains = self
+                                    .selected_stain_ids
+                                    .get(&slot)
+                                    .copied()
+                                    .unwrap_or([0, 0]);
                                 let ch = self.active_dye_channel;
 
-                                let is_dual = self.slot_states.get(&slot)
+                                let is_dual = self
+                                    .slot_states
+                                    .get(&slot)
                                     .map(|s| s.is_dual_dye)
                                     .unwrap_or(false);
 
                                 if is_dual {
                                     ui.horizontal(|ui| {
                                         ui.label("通道:");
-                                        ui.selectable_value(&mut self.active_dye_channel, 0, "通道1");
-                                        ui.selectable_value(&mut self.active_dye_channel, 1, "通道2");
+                                        ui.selectable_value(
+                                            &mut self.active_dye_channel,
+                                            0,
+                                            "通道1",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.active_dye_channel,
+                                            1,
+                                            "通道2",
+                                        );
                                     });
                                 }
 
                                 ui.horizontal_wrapped(|ui| {
                                     for &shade in SHADE_ORDER {
                                         let label = shade_group_name(shade);
-                                        if ui.selectable_label(self.selected_shade == shade, label).clicked() {
+                                        if ui
+                                            .selectable_label(self.selected_shade == shade, label)
+                                            .clicked()
+                                        {
                                             self.selected_shade = shade;
                                         }
                                     }
                                 });
 
-                                let stain_data: Vec<(u32, String, [u8; 3])> = app.stains
+                                let stain_data: Vec<(u32, String, [u8; 3])> = app
+                                    .stains
                                     .iter()
                                     .filter(|s| s.shade == self.selected_shade)
                                     .map(|s| (s.id, s.name.clone(), s.color))
@@ -552,7 +617,8 @@ impl GlamourEditor {
                                     );
                                     if no_dye_selected {
                                         ui.painter().rect_stroke(
-                                            no_rect, 2.0,
+                                            no_rect,
+                                            2.0,
                                             egui::Stroke::new(2.0, egui::Color32::WHITE),
                                             egui::StrokeKind::Outside,
                                         );
@@ -563,7 +629,11 @@ impl GlamourEditor {
                                     no_resp.on_hover_text("无染料");
 
                                     for (id, name, color_rgb) in &stain_data {
-                                        let color = egui::Color32::from_rgb(color_rgb[0], color_rgb[1], color_rgb[2]);
+                                        let color = egui::Color32::from_rgb(
+                                            color_rgb[0],
+                                            color_rgb[1],
+                                            color_rgb[2],
+                                        );
                                         let selected = slot_stains[ch] == *id;
                                         let (rect, resp) = ui.allocate_exact_size(
                                             egui::vec2(20.0, 20.0),
@@ -572,7 +642,8 @@ impl GlamourEditor {
                                         ui.painter().rect_filled(rect, 2.0, color);
                                         if selected {
                                             ui.painter().rect_stroke(
-                                                rect, 2.0,
+                                                rect,
+                                                2.0,
                                                 egui::Stroke::new(2.0, egui::Color32::WHITE),
                                                 egui::StrokeKind::Outside,
                                             );
@@ -588,9 +659,18 @@ impl GlamourEditor {
                                 ui.horizontal(|ui| {
                                     if slot_stains[ch] == 0 {
                                         ui.label("当前: 无染料");
-                                    } else if let Some(stain) = app.stains.iter().find(|s| s.id == slot_stains[ch]) {
-                                        let color = egui::Color32::from_rgb(stain.color[0], stain.color[1], stain.color[2]);
-                                        let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                                    } else if let Some(stain) =
+                                        app.stains.iter().find(|s| s.id == slot_stains[ch])
+                                    {
+                                        let color = egui::Color32::from_rgb(
+                                            stain.color[0],
+                                            stain.color[1],
+                                            stain.color[2],
+                                        );
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(16.0, 16.0),
+                                            egui::Sense::hover(),
+                                        );
                                         ui.painter().rect_filled(rect, 2.0, color);
                                         ui.label(format!("当前: {}", stain.name));
                                     }
@@ -598,9 +678,14 @@ impl GlamourEditor {
 
                                 // 应用染色变更
                                 if let Some(new_id) = new_stain_id {
-                                    let entry = self.selected_stain_ids.entry(slot).or_insert([0, 0]);
+                                    let entry =
+                                        self.selected_stain_ids.entry(slot).or_insert([0, 0]);
                                     entry[ch] = new_id;
-                                    if let Some(gslot) = self.glamour_set.slots.get_mut(crate::glamour::slot_key_for(slot)) {
+                                    if let Some(gslot) = self
+                                        .glamour_set
+                                        .slots
+                                        .get_mut(crate::glamour::slot_key_for(slot))
+                                    {
                                         gslot.stain_ids = *entry;
                                     }
                                     self.dirty = true;
@@ -649,7 +734,10 @@ impl GlamourEditor {
                     } else {
                         slot.display_name().to_string()
                     };
-                    if ui.selectable_label(self.active_slot == *slot, &label).clicked() {
+                    if ui
+                        .selectable_label(self.active_slot == *slot, &label)
+                        .clicked()
+                    {
                         self.active_slot = *slot;
                     }
                 }
@@ -702,12 +790,15 @@ impl GlamourEditor {
                 if let Some(view) = self.model_renderer.color_view() {
                     let tid = match self.model_texture_id {
                         Some(tid) => {
-                            self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
-                                &self.render_state.device,
-                                view,
-                                wgpu::FilterMode::Linear,
-                                tid,
-                            );
+                            self.render_state
+                                .renderer
+                                .write()
+                                .update_egui_texture_from_wgpu_texture(
+                                    &self.render_state.device,
+                                    view,
+                                    wgpu::FilterMode::Linear,
+                                    tid,
+                                );
                             tid
                         }
                         None => {
@@ -739,7 +830,8 @@ impl GlamourEditor {
                     egui::Color32::from_rgba_premultiplied(180, 180, 180, 160),
                 );
             } else {
-                ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 36));
+                ui.painter()
+                    .rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 36));
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -754,7 +846,11 @@ impl GlamourEditor {
     }
 
     fn assign_item_to_slot(&mut self, slot: EquipSlot, item: &EquipmentItem) {
-        let stain_ids = self.selected_stain_ids.get(&slot).copied().unwrap_or([0, 0]);
+        let stain_ids = self
+            .selected_stain_ids
+            .get(&slot)
+            .copied()
+            .unwrap_or([0, 0]);
         self.glamour_set.set_slot(slot, item.row_id, stain_ids);
         self.needs_mesh_rebuild = true;
         self.dirty = true;

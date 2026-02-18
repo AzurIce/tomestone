@@ -23,10 +23,13 @@ pub struct GlamourSet {
 
 impl GlamourSet {
     pub fn new(name: impl Into<String>) -> Self {
-        let id = format!("{:x}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis());
+        let id = format!(
+            "{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
         Self {
             id,
             name: name.into(),
@@ -39,7 +42,10 @@ impl GlamourSet {
     }
 
     pub fn set_slot(&mut self, slot: EquipSlot, item_id: u32, stain_ids: [u32; 2]) {
-        self.slots.insert(slot_key(slot).to_string(), GlamourSlot { item_id, stain_ids });
+        self.slots.insert(
+            slot_key(slot).to_string(),
+            GlamourSlot { item_id, stain_ids },
+        );
     }
 
     pub fn remove_slot(&mut self, slot: EquipSlot) {
@@ -65,23 +71,18 @@ pub fn slot_key_for(slot: EquipSlot) -> &'static str {
     slot_key(slot)
 }
 
-pub fn slot_from_key(key: &str) -> Option<EquipSlot> {
-    match key {
-        "head" => Some(EquipSlot::Head),
-        "body" => Some(EquipSlot::Body),
-        "gloves" => Some(EquipSlot::Gloves),
-        "legs" => Some(EquipSlot::Legs),
-        "feet" => Some(EquipSlot::Feet),
-        _ => None,
-    }
+#[cfg(debug_assertions)]
+fn glamour_dir() -> PathBuf {
+    PathBuf::from("./glamours")
 }
 
+#[cfg(not(debug_assertions))]
 fn glamour_dir() -> PathBuf {
-    let exe_dir = std::env::current_exe()
+    std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
-    exe_dir.join("glamours")
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("glamours")
 }
 
 pub fn save_glamour_set(set: &GlamourSet) -> Result<(), String> {

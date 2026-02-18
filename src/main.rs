@@ -3,7 +3,6 @@ mod game_data;
 mod glamour;
 mod glamour_editor;
 mod mdl_loader;
-mod renderer;
 mod skeleton;
 mod tex_loader;
 
@@ -12,11 +11,10 @@ use std::path::Path;
 
 use eframe::egui;
 use egui_wgpu::wgpu;
-use game_data::{EquipSlot, EquipmentItem, GameData, StainEntry, SHADE_ORDER, shade_group_name};
-use mdl_loader::BoundingBox;
+use game_data::{shade_group_name, EquipSlot, EquipmentItem, GameData, StainEntry, SHADE_ORDER};
 use physis::stm::StainingTemplate;
-use renderer::{Camera, ModelRenderer};
 use tex_loader::CachedMaterial;
+use tomestone_render::{BoundingBox, Camera, ModelRenderer};
 
 // ── 页面路由 ──
 
@@ -360,7 +358,7 @@ impl App {
         };
 
         // 为每个 mesh 生成新纹理 (None = 不更新)
-        let mut new_textures: Vec<Option<tex_loader::TextureData>> = Vec::new();
+        let mut new_textures: Vec<Option<tomestone_render::TextureData>> = Vec::new();
 
         for mesh in &self.cached_meshes {
             let mat_idx = mesh.material_index;
@@ -369,20 +367,21 @@ impl App {
                     if let (Some(color_table), Some(id_tex)) =
                         (&cached.color_table, &cached.id_texture)
                     {
-                        let dyed_colors = if self.selected_stain_ids[0] > 0 || self.selected_stain_ids[1] > 0 {
-                            if let Some(dye_table) = &cached.color_dye_table {
-                                Some(dye::apply_dye(
-                                    color_table,
-                                    dye_table,
-                                    stm,
-                                    self.selected_stain_ids,
-                                ))
+                        let dyed_colors =
+                            if self.selected_stain_ids[0] > 0 || self.selected_stain_ids[1] > 0 {
+                                if let Some(dye_table) = &cached.color_dye_table {
+                                    Some(dye::apply_dye(
+                                        color_table,
+                                        dye_table,
+                                        stm,
+                                        self.selected_stain_ids,
+                                    ))
+                                } else {
+                                    None
+                                }
                             } else {
                                 None
-                            }
-                        } else {
-                            None
-                        };
+                            };
                         let baked = tex_loader::bake_color_table_texture(
                             id_tex,
                             color_table,
@@ -493,8 +492,16 @@ impl App {
             let mut start_rename: Option<(usize, String)> = None;
 
             // 预计算摘要以避免借用冲突
-            let summaries: Vec<(String, usize, String)> = self.glamour_sets.iter()
-                .map(|gs| (gs.name.clone(), gs.slot_count(), self.glamour_slot_summary(gs)))
+            let summaries: Vec<(String, usize, String)> = self
+                .glamour_sets
+                .iter()
+                .map(|gs| {
+                    (
+                        gs.name.clone(),
+                        gs.slot_count(),
+                        self.glamour_slot_summary(gs),
+                    )
+                })
                 .collect();
 
             egui::ScrollArea::vertical().show(ui, |ui| {
@@ -502,7 +509,9 @@ impl App {
                     ui.horizontal(|ui| {
                         if self.renaming_glamour_idx == Some(i) {
                             ui.text_edit_singleline(&mut self.rename_buffer);
-                            if ui.button("确定").clicked() || ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                            if ui.button("确定").clicked()
+                                || ui.input(|inp| inp.key_pressed(egui::Key::Enter))
+                            {
                                 confirm_rename = Some(i);
                             }
                             if ui.button("取消").clicked() {
@@ -516,17 +525,20 @@ impl App {
                                 ui.label(slot_summary);
                             }
 
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("删除").clicked() {
-                                    delete_idx = Some(i);
-                                }
-                                if ui.small_button("重命名").clicked() {
-                                    start_rename = Some((i, name.clone()));
-                                }
-                                if ui.small_button("编辑").clicked() {
-                                    edit_idx = Some(i);
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("删除").clicked() {
+                                        delete_idx = Some(i);
+                                    }
+                                    if ui.small_button("重命名").clicked() {
+                                        start_rename = Some((i, name.clone()));
+                                    }
+                                    if ui.small_button("编辑").clicked() {
+                                        edit_idx = Some(i);
+                                    }
+                                },
+                            );
                         }
                     });
                     ui.separator();
@@ -578,7 +590,9 @@ impl App {
         let mut parts = Vec::new();
         for slot in &ALL_SLOTS {
             if let Some(gslot) = gs.get_slot(*slot) {
-                let name = self.item_id_map.get(&gslot.item_id)
+                let name = self
+                    .item_id_map
+                    .get(&gslot.item_id)
                     .and_then(|&idx| self.items.get(idx))
                     .map(|item| item.name.as_str())
                     .unwrap_or("???");
@@ -642,9 +656,21 @@ impl App {
                     egui::ComboBox::from_id_salt("sort_order")
                         .selected_text(self.sort_order.label())
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.sort_order, SortOrder::ByName, SortOrder::ByName.label());
-                            ui.selectable_value(&mut self.sort_order, SortOrder::BySetId, SortOrder::BySetId.label());
-                            ui.selectable_value(&mut self.sort_order, SortOrder::BySlot, SortOrder::BySlot.label());
+                            ui.selectable_value(
+                                &mut self.sort_order,
+                                SortOrder::ByName,
+                                SortOrder::ByName.label(),
+                            );
+                            ui.selectable_value(
+                                &mut self.sort_order,
+                                SortOrder::BySetId,
+                                SortOrder::BySetId.label(),
+                            );
+                            ui.selectable_value(
+                                &mut self.sort_order,
+                                SortOrder::BySlot,
+                                SortOrder::BySlot.label(),
+                            );
                         });
                 });
                 if self.sort_order != prev_sort {
@@ -697,8 +723,7 @@ impl App {
                             |ui, row_range| {
                                 for row_idx in row_range {
                                     if let Some((global_idx, label)) = filtered.get(row_idx) {
-                                        let selected =
-                                            self.selected_item == Some(*global_idx);
+                                        let selected = self.selected_item == Some(*global_idx);
                                         if ui.selectable_label(selected, label).clicked() {
                                             self.selected_item = Some(*global_idx);
                                         }
@@ -773,8 +798,8 @@ impl App {
                                             FlatRow::Item { global_idx, label } => {
                                                 ui.horizontal(|ui| {
                                                     ui.add_space(16.0);
-                                                    let selected = self.selected_item
-                                                        == Some(*global_idx);
+                                                    let selected =
+                                                        self.selected_item == Some(*global_idx);
                                                     if ui
                                                         .selectable_label(selected, label)
                                                         .clicked()
@@ -915,10 +940,8 @@ impl App {
                         ui.horizontal_wrapped(|ui| {
                             // "无染料" 按钮
                             let no_dye_selected = self.selected_stain_ids[ch] == 0;
-                            let (no_rect, no_resp) = ui.allocate_exact_size(
-                                egui::vec2(20.0, 20.0),
-                                egui::Sense::click(),
-                            );
+                            let (no_rect, no_resp) = ui
+                                .allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
                             let no_bg = if no_dye_selected {
                                 egui::Color32::from_gray(180)
                             } else {
@@ -947,8 +970,11 @@ impl App {
 
                             // 当前 shade 组的色块
                             for (id, name, color_rgb) in &stain_data {
-                                let color =
-                                    egui::Color32::from_rgb(color_rgb[0], color_rgb[1], color_rgb[2]);
+                                let color = egui::Color32::from_rgb(
+                                    color_rgb[0],
+                                    color_rgb[1],
+                                    color_rgb[2],
+                                );
                                 let selected = self.selected_stain_ids[ch] == *id;
                                 let (rect, resp) = ui.allocate_exact_size(
                                     egui::vec2(20.0, 20.0),
@@ -1008,7 +1034,11 @@ impl App {
                         match mdl_loader::load_mdl_with_fallback(&self.game, &paths) {
                             Ok(result) if !result.meshes.is_empty() => {
                                 let bbox = mdl_loader::compute_bounding_box(&result.meshes);
-                                println!("加载纹理: {} 个材质, {} 个网格", result.material_names.len(), result.meshes.len());
+                                println!(
+                                    "加载纹理: {} 个材质, {} 个网格",
+                                    result.material_names.len(),
+                                    result.meshes.len()
+                                );
                                 let load_result = tex_loader::load_mesh_textures(
                                     &self.game,
                                     &result.material_names,
@@ -1016,10 +1046,15 @@ impl App {
                                     item.set_id,
                                     item.variant_id,
                                 );
+                                let geometry: Vec<(&[tomestone_render::Vertex], &[u16])> = result
+                                    .meshes
+                                    .iter()
+                                    .map(|m| (m.vertices.as_slice(), m.indices.as_slice()))
+                                    .collect();
                                 self.model_renderer.set_mesh_data(
                                     &self.render_state.device,
                                     &self.render_state.queue,
-                                    &result.meshes,
+                                    &geometry,
                                     &load_result.mesh_textures,
                                 );
                                 self.cached_materials = load_result.materials;
@@ -1032,9 +1067,12 @@ impl App {
                                 }
                             }
                             _ => {
-                                eprintln!("模型加载失败 e{:04} v{:04}: {:?}",
-                                    item.set_id, item.variant_id,
-                                    mdl_loader::load_mdl_with_fallback(&self.game, &paths).err());
+                                eprintln!(
+                                    "模型加载失败 e{:04} v{:04}: {:?}",
+                                    item.set_id,
+                                    item.variant_id,
+                                    mdl_loader::load_mdl_with_fallback(&self.game, &paths).err()
+                                );
                                 self.model_renderer.set_mesh_data(
                                     &self.render_state.device,
                                     &self.render_state.queue,
@@ -1060,8 +1098,7 @@ impl App {
                     if response.dragged_by(egui::PointerButton::Primary) {
                         let delta = response.drag_delta();
                         self.camera.yaw += delta.x * 0.01;
-                        self.camera.pitch = (self.camera.pitch + delta.y * 0.01)
-                            .clamp(-1.5, 1.5);
+                        self.camera.pitch = (self.camera.pitch + delta.y * 0.01).clamp(-1.5, 1.5);
                     }
                     if response.dragged_by(egui::PointerButton::Secondary) {
                         let delta = response.drag_delta();
@@ -1077,7 +1114,8 @@ impl App {
                     if response.hovered() {
                         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                         if scroll != 0.0 {
-                            self.camera.distance = (self.camera.distance - scroll * 0.005).clamp(0.5, 20.0);
+                            self.camera.distance =
+                                (self.camera.distance - scroll * 0.005).clamp(0.5, 20.0);
                         }
                     }
 
@@ -1095,20 +1133,24 @@ impl App {
                         if let Some(view) = self.model_renderer.color_view() {
                             let tid = match self.model_texture_id {
                                 Some(tid) => {
-                                    self.render_state.renderer.write().update_egui_texture_from_wgpu_texture(
-                                        &self.render_state.device,
-                                        view,
-                                        wgpu::FilterMode::Linear,
-                                        tid,
-                                    );
+                                    self.render_state
+                                        .renderer
+                                        .write()
+                                        .update_egui_texture_from_wgpu_texture(
+                                            &self.render_state.device,
+                                            view,
+                                            wgpu::FilterMode::Linear,
+                                            tid,
+                                        );
                                     tid
                                 }
                                 None => {
-                                    let tid = self.render_state.renderer.write().register_native_texture(
-                                        &self.render_state.device,
-                                        view,
-                                        wgpu::FilterMode::Linear,
-                                    );
+                                    let tid =
+                                        self.render_state.renderer.write().register_native_texture(
+                                            &self.render_state.device,
+                                            view,
+                                            wgpu::FilterMode::Linear,
+                                        );
                                     self.model_texture_id = Some(tid);
                                     tid
                                 }
@@ -1117,7 +1159,10 @@ impl App {
                             ui.painter().image(
                                 tid,
                                 rect,
-                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
                                 egui::Color32::WHITE,
                             );
                         }
@@ -1133,7 +1178,8 @@ impl App {
                             egui::Color32::from_rgba_premultiplied(180, 180, 180, 160),
                         );
                     } else {
-                        ui.painter().rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 36));
+                        ui.painter()
+                            .rect_filled(rect, 0.0, egui::Color32::from_rgb(30, 30, 36));
                         ui.painter().text(
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
@@ -1183,7 +1229,9 @@ fn main() {
         options,
         Box::new(|cc| {
             setup_fonts(cc);
-            let render_state = cc.wgpu_render_state.as_ref()
+            let render_state = cc
+                .wgpu_render_state
+                .as_ref()
                 .expect("需要 wgpu 后端")
                 .clone();
             Ok(Box::new(App::new(game, items, stains, stm, render_state)))

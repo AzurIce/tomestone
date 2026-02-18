@@ -1,5 +1,6 @@
-use std::io::{Cursor, Read, Seek, SeekFrom};
 use crate::game_data::GameData;
+use std::io::{Cursor, Read, Seek, SeekFrom};
+use tomestone_render::{BoundingBox, Vertex};
 
 /// MDL 解析结果
 pub struct MdlResult {
@@ -19,17 +20,6 @@ pub struct MeshData {
     pub skin_vertices: Vec<SkinVertex>,
 }
 
-/// GPU 顶点格式
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pub position: [f32; 3],
-    pub normal: [f32; 3],
-    pub uv: [f32; 2],
-    pub color: [f32; 4],
-    pub tangent: [f32; 4],
-}
-
 /// 每顶点蒙皮数据（不上传 GPU）
 #[derive(Clone, Debug)]
 pub struct SkinVertex {
@@ -43,30 +33,6 @@ pub struct MdlBoneTable {
     pub bone_indices: Vec<u16>,
 }
 
-/// 模型包围盒
-#[derive(Clone, Debug)]
-pub struct BoundingBox {
-    pub min: [f32; 3],
-    pub max: [f32; 3],
-}
-
-impl BoundingBox {
-    pub fn center(&self) -> [f32; 3] {
-        [
-            (self.min[0] + self.max[0]) * 0.5,
-            (self.min[1] + self.max[1]) * 0.5,
-            (self.min[2] + self.max[2]) * 0.5,
-        ]
-    }
-
-    pub fn size(&self) -> f32 {
-        let dx = self.max[0] - self.min[0];
-        let dy = self.max[1] - self.min[1];
-        let dz = self.max[2] - self.min[2];
-        (dx * dx + dy * dy + dz * dz).sqrt()
-    }
-}
-
 /// 计算网格数据的包围盒
 pub fn compute_bounding_box(meshes: &[MeshData]) -> BoundingBox {
     let mut min = [f32::MAX; 3];
@@ -74,13 +40,20 @@ pub fn compute_bounding_box(meshes: &[MeshData]) -> BoundingBox {
     for mesh in meshes {
         for v in &mesh.vertices {
             for i in 0..3 {
-                if v.position[i] < min[i] { min[i] = v.position[i]; }
-                if v.position[i] > max[i] { max[i] = v.position[i]; }
+                if v.position[i] < min[i] {
+                    min[i] = v.position[i];
+                }
+                if v.position[i] > max[i] {
+                    max[i] = v.position[i];
+                }
             }
         }
     }
     if min[0] == f32::MAX {
-        return BoundingBox { min: [0.0; 3], max: [0.0; 3] };
+        return BoundingBox {
+            min: [0.0; 3],
+            max: [0.0; 3],
+        };
     }
     BoundingBox { min, max }
 }
@@ -114,7 +87,8 @@ fn read_f32(c: &mut Cursor<&[u8]>) -> Result<f32, String> {
     Ok(f32::from_le_bytes(b))
 }
 fn skip(c: &mut Cursor<&[u8]>, n: i64) -> Result<(), String> {
-    c.seek(SeekFrom::Current(n)).map_err(|e| format!("skip: {e}"))?;
+    c.seek(SeekFrom::Current(n))
+        .map_err(|e| format!("skip: {e}"))?;
     Ok(())
 }
 
@@ -126,11 +100,14 @@ const VERTEX_ELEMENT_SLOTS: usize = 17;
 struct VertexElement {
     stream: u8,
     offset: u8,
-    format: u8,  // 2=Single3, 3=Single4, 5=Byte4, 8=ByteFloat4, 13=Half2, 14=Half4
-    usage: u8,   // 0=Position, 1=BlendWeight, 2=BlendIndex, 3=Normal, 4=UV, 6=BiTangent, 7=Color
+    format: u8, // 2=Single3, 3=Single4, 5=Byte4, 8=ByteFloat4, 13=Half2, 14=Half4
+    usage: u8,  // 0=Position, 1=BlendWeight, 2=BlendIndex, 3=Normal, 4=UV, 6=BiTangent, 7=Color
 }
 
-fn read_vertex_declarations(c: &mut Cursor<&[u8]>, count: u16) -> Result<Vec<Vec<VertexElement>>, String> {
+fn read_vertex_declarations(
+    c: &mut Cursor<&[u8]>,
+    count: u16,
+) -> Result<Vec<Vec<VertexElement>>, String> {
     let mut decls = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let mut elements = Vec::new();
@@ -146,7 +123,12 @@ fn read_vertex_declarations(c: &mut Cursor<&[u8]>, count: u16) -> Result<Vec<Vec
                 skip(c, remaining as i64 * 8)?;
                 break;
             }
-            elements.push(VertexElement { stream, offset, format, usage });
+            elements.push(VertexElement {
+                stream,
+                offset,
+                format,
+                usage,
+            });
         }
         decls.push(elements);
     }
@@ -210,7 +192,8 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
     let string_start = c.position();
     let string_end = string_start + string_size as u64;
     let string_block = data[string_start as usize..string_end as usize].to_vec();
-    c.seek(SeekFrom::Start(string_end)).map_err(|e| format!("seek past strings: {e}"))?;
+    c.seek(SeekFrom::Start(string_end))
+        .map_err(|e| format!("seek past strings: {e}"))?;
 
     // ---- Model Header ----
     let _radius = read_f32(&mut c)?;
@@ -247,7 +230,12 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
         skip(&mut c, 4 + 4)?; // vertex/index buffer size
         let vertex_data_offset = read_u32(&mut c)?;
         let index_data_offset = read_u32(&mut c)?;
-        lods.push(MdlLod { mesh_index, mesh_count: mesh_count_lod, vertex_data_offset, index_data_offset });
+        lods.push(MdlLod {
+            mesh_index,
+            mesh_count: mesh_count_lod,
+            vertex_data_offset,
+            index_data_offset,
+        });
     }
 
     // ---- Extra LODs (optional) ----
@@ -275,7 +263,11 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
         let vbs2 = read_u8(&mut c)?;
         let _stream_count = read_u8(&mut c)?;
         meshes.push(MdlMesh {
-            vertex_count, index_count, start_index, material_index, bone_table_index,
+            vertex_count,
+            index_count,
+            start_index,
+            material_index,
+            bone_table_index,
             vertex_buffer_offset: [vbo0, vbo1, vbo2],
             vertex_buffer_stride: [vbs0, vbs1, vbs2],
         });
@@ -339,7 +331,9 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
             if padding > 0 {
                 skip(&mut c, padding)?;
             }
-            tables.push(MdlBoneTable { bone_indices: indices });
+            tables.push(MdlBoneTable {
+                bone_indices: indices,
+            });
         }
         tables
     };
@@ -362,10 +356,27 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
     for mi in lod.mesh_index..(lod.mesh_index + lod.mesh_count) {
         let mesh = &meshes[mi as usize];
         let decl = &decls[mi as usize];
-        if mesh.vertex_count == 0 { continue; }
+        if mesh.vertex_count == 0 {
+            continue;
+        }
 
-        let mut vertices = vec![Vertex { position: [0.0; 3], normal: [0.0, 1.0, 0.0], uv: [0.0; 2], color: [1.0, 1.0, 1.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0] }; mesh.vertex_count as usize];
-        let mut skin_vertices = vec![SkinVertex { blend_weights: [0.0; 4], blend_indices: [0; 4] }; mesh.vertex_count as usize];
+        let mut vertices = vec![
+            Vertex {
+                position: [0.0; 3],
+                normal: [0.0, 1.0, 0.0],
+                uv: [0.0; 2],
+                color: [1.0, 1.0, 1.0, 1.0],
+                tangent: [1.0, 0.0, 0.0, 1.0]
+            };
+            mesh.vertex_count as usize
+        ];
+        let mut skin_vertices = vec![
+            SkinVertex {
+                blend_weights: [0.0; 4],
+                blend_indices: [0; 4]
+            };
+            mesh.vertex_count as usize
+        ];
 
         for k in 0..mesh.vertex_count as usize {
             for elem in decl {
@@ -374,69 +385,96 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
                     + elem.offset as u32
                     + mesh.vertex_buffer_stride[elem.stream as usize] as u32 * k as u32;
 
-                c.seek(SeekFrom::Start(abs_offset as u64)).map_err(|e| format!("seek vertex: {e}"))?;
+                c.seek(SeekFrom::Start(abs_offset as u64))
+                    .map_err(|e| format!("seek vertex: {e}"))?;
 
                 match (elem.usage, elem.format) {
                     // Position
-                    (0, 2) => { // Single3
-                        vertices[k].position = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    (0, 2) => {
+                        // Single3
+                        vertices[k].position =
+                            [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
                     }
-                    (0, 3) => { // Single4
-                        vertices[k].position = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    (0, 3) => {
+                        // Single4
+                        vertices[k].position =
+                            [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
                     }
-                    (0, 14) => { // Half4
+                    (0, 14) => {
+                        // Half4
                         let v = read_half4(&mut c)?;
                         vertices[k].position = [v[0], v[1], v[2]];
                     }
                     // BlendWeight
-                    (1, 8) | (1, 5) => { // ByteFloat4 or Byte4
+                    (1, 8) | (1, 5) => {
+                        // ByteFloat4 or Byte4
                         skin_vertices[k].blend_weights = read_byte_float4(&mut c)?;
                     }
                     // BlendIndex
-                    (2, 5) => { // Byte4 (4 raw u8)
+                    (2, 5) => {
+                        // Byte4 (4 raw u8)
                         skin_vertices[k].blend_indices = [
-                            read_u8(&mut c)?, read_u8(&mut c)?,
-                            read_u8(&mut c)?, read_u8(&mut c)?,
+                            read_u8(&mut c)?,
+                            read_u8(&mut c)?,
+                            read_u8(&mut c)?,
+                            read_u8(&mut c)?,
                         ];
                     }
                     // Normal
-                    (3, 2) => { // Single3
-                        vertices[k].normal = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    (3, 2) => {
+                        // Single3
+                        vertices[k].normal =
+                            [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
                     }
-                    (3, 3) => { // Single4
-                        vertices[k].normal = [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
+                    (3, 3) => {
+                        // Single4
+                        vertices[k].normal =
+                            [read_f32(&mut c)?, read_f32(&mut c)?, read_f32(&mut c)?];
                     }
-                    (3, 14) => { // Half4
+                    (3, 14) => {
+                        // Half4
                         let v = read_half4(&mut c)?;
                         vertices[k].normal = [v[0], v[1], v[2]];
                     }
-                    (3, 8) => { // ByteFloat4 (packed normal)
+                    (3, 8) => {
+                        // ByteFloat4 (packed normal)
                         let v = read_byte_float4(&mut c)?;
                         vertices[k].normal = [v[0] * 2.0 - 1.0, v[1] * 2.0 - 1.0, v[2] * 2.0 - 1.0];
                     }
                     // UV
-                    (4, 1) => { // Single2
+                    (4, 1) => {
+                        // Single2
                         vertices[k].uv = [read_f32(&mut c)?, read_f32(&mut c)?];
                     }
-                    (4, 13) => { // Half2
+                    (4, 13) => {
+                        // Half2
                         vertices[k].uv = read_half2(&mut c)?;
                     }
-                    (4, 14) => { // Half4 (take first 2)
+                    (4, 14) => {
+                        // Half4 (take first 2)
                         let v = read_half4(&mut c)?;
                         vertices[k].uv = [v[0], v[1]];
                     }
                     // Color
-                    (7, 8) => { // ByteFloat4
+                    (7, 8) => {
+                        // ByteFloat4
                         vertices[k].color = read_byte_float4(&mut c)?;
                     }
                     // Tangent1 (BiTangent)
-                    (6, 14) => { // Half4 (already in [-1,1] range)
+                    (6, 14) => {
+                        // Half4 (already in [-1,1] range)
                         let v = read_half4(&mut c)?;
                         vertices[k].tangent = v;
                     }
-                    (6, 8) => { // ByteFloat4 (packed tangent, [0,1] → [-1,1])
+                    (6, 8) => {
+                        // ByteFloat4 (packed tangent, [0,1] → [-1,1])
                         let v = read_byte_float4(&mut c)?;
-                        vertices[k].tangent = [v[0] * 2.0 - 1.0, v[1] * 2.0 - 1.0, v[2] * 2.0 - 1.0, v[3] * 2.0 - 1.0];
+                        vertices[k].tangent = [
+                            v[0] * 2.0 - 1.0,
+                            v[1] * 2.0 - 1.0,
+                            v[2] * 2.0 - 1.0,
+                            v[3] * 2.0 - 1.0,
+                        ];
                     }
                     _ => {} // 跳过其他属性
                 }
@@ -445,7 +483,8 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
 
         // 读取索引
         let idx_offset = lod.index_data_offset + mesh.start_index * 2;
-        c.seek(SeekFrom::Start(idx_offset as u64)).map_err(|e| format!("seek index: {e}"))?;
+        c.seek(SeekFrom::Start(idx_offset as u64))
+            .map_err(|e| format!("seek index: {e}"))?;
         let mut indices = Vec::with_capacity(mesh.index_count as usize);
         for _ in 0..mesh.index_count {
             indices.push(read_u16(&mut c)?);
@@ -460,7 +499,12 @@ fn parse_mdl(data: &[u8]) -> Result<MdlResult, String> {
         });
     }
 
-    Ok(MdlResult { meshes: result, material_names, bone_names, bone_tables })
+    Ok(MdlResult {
+        meshes: result,
+        material_names,
+        bone_names,
+        bone_tables,
+    })
 }
 
 // ---- Half-float 读取 ----
@@ -476,7 +520,12 @@ fn read_half4(c: &mut Cursor<&[u8]>) -> Result<[f32; 4], String> {
     let b = read_u16(c)?;
     let cc = read_u16(c)?;
     let d = read_u16(c)?;
-    Ok([half_to_f32(a), half_to_f32(b), half_to_f32(cc), half_to_f32(d)])
+    Ok([
+        half_to_f32(a),
+        half_to_f32(b),
+        half_to_f32(cc),
+        half_to_f32(d),
+    ])
 }
 
 fn read_byte_float4(c: &mut Cursor<&[u8]>) -> Result<[f32; 4], String> {
@@ -493,15 +542,23 @@ fn half_to_f32(h: u16) -> f32 {
     let exp = ((h >> 10) & 0x1F) as u32;
     let mant = (h & 0x3FF) as u32;
     if exp == 0 {
-        if mant == 0 { return if sign == 1 { -0.0 } else { 0.0 }; }
+        if mant == 0 {
+            return if sign == 1 { -0.0 } else { 0.0 };
+        }
         // subnormal
         let v = mant as f32 / 1024.0 * (2.0f32).powi(-14);
         return if sign == 1 { -v } else { v };
     }
     if exp == 31 {
         return if mant == 0 {
-            if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY }
-        } else { f32::NAN };
+            if sign == 1 {
+                f32::NEG_INFINITY
+            } else {
+                f32::INFINITY
+            }
+        } else {
+            f32::NAN
+        };
     }
     let bits = (sign << 31) | ((exp + 112) << 23) | (mant << 13);
     f32::from_bits(bits)
@@ -513,8 +570,12 @@ pub fn load_mdl_with_fallback(game: &GameData, paths: &[String]) -> Result<MdlRe
     for path in paths {
         match load_mdl(game, path) {
             Ok(result) if !result.meshes.is_empty() => return Ok(result),
-            Ok(_) => { last_err = format!("{}: 网格为空", path); }
-            Err(e) => { last_err = format!("{}: {}", path, e); }
+            Ok(_) => {
+                last_err = format!("{}: 网格为空", path);
+            }
+            Err(e) => {
+                last_err = format!("{}: {}", path, e);
+            }
         }
     }
     Err(last_err)

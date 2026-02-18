@@ -635,6 +635,10 @@ impl ModelRenderer {
     pub fn has_mesh(&self) -> bool {
         !self.meshes.is_empty()
     }
+
+    pub fn mesh_count(&self) -> usize {
+        self.meshes.len()
+    }
 }
 
 // ---- 数学工具 ----

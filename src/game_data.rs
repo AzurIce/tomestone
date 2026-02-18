@@ -82,29 +82,18 @@ impl EquipmentItem {
         )
     }
 
+    /// 生成指定种族码的模型路径
+    pub fn model_path_for_race(&self, race_code: &str) -> String {
+        format!(
+            "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
+            self.set_id, race_code, self.set_id, self.slot.slot_abbr()
+        )
+    }
+
     /// 返回候选模型路径列表，按种族码优先级尝试
     pub fn model_paths(&self) -> Vec<String> {
         // FF14 种族码: c{raceId:02}{bodyId:02}
         // 优先尝试通用种族，再尝试其他种族的专属模型
-        const RACE_CODES: &[&str] = &[
-            "c0201", // Hyur Midlander ♀
-            "c0101", // Hyur Midlander ♂
-            "c0401", // Hyur Highlander ♀
-            "c0301", // Hyur Highlander ♂
-            "c0801", // Miqo'te ♀
-            "c0701", // Miqo'te ♂
-            "c0601", // Elezen ♀
-            "c0501", // Elezen ♂
-            "c1401", // Au Ra ♀
-            "c1301", // Au Ra ♂
-            "c1201", // Lalafell ♀
-            "c1101", // Lalafell ♂
-            "c1001", // Roegadyn ♀
-            "c0901", // Roegadyn ♂
-            "c1801", // Viera ♀
-            "c1701", // Viera ♂
-            "c1501", // Hrothgar ♂
-        ];
         RACE_CODES
             .iter()
             .map(|rc| {
@@ -116,6 +105,27 @@ impl EquipmentItem {
             .collect()
     }
 }
+
+/// 种族码优先级列表
+pub const RACE_CODES: &[&str] = &[
+    "c0201", // Hyur Midlander ♀
+    "c0101", // Hyur Midlander ♂
+    "c0401", // Hyur Highlander ♀
+    "c0301", // Hyur Highlander ♂
+    "c0801", // Miqo'te ♀
+    "c0701", // Miqo'te ♂
+    "c0601", // Elezen ♀
+    "c0501", // Elezen ♂
+    "c1401", // Au Ra ♀
+    "c1301", // Au Ra ♂
+    "c1201", // Lalafell ♀
+    "c1101", // Lalafell ♂
+    "c1001", // Roegadyn ♀
+    "c0901", // Roegadyn ♂
+    "c1801", // Viera ♀
+    "c1701", // Viera ♂
+    "c1501", // Hrothgar ♂
+];
 
 // Item 表列索引 (通过 column inspector 确定)
 const COL_NAME: usize = 0;
@@ -186,6 +196,15 @@ impl GameData {
             stm.entries.len()
         );
         Some(stm)
+    }
+
+    /// 加载指定种族码的骨骼
+    pub fn load_skeleton(&self, race_code: &str) -> Option<physis::skeleton::Skeleton> {
+        let path = format!(
+            "chara/human/{}/skeleton/base/b0001/skl_{}b0001.sklb",
+            race_code, race_code
+        );
+        self.physis.borrow_mut().parsed(&path).ok()
     }
 
     /// 加载所有可装备的防具物品

@@ -1,7 +1,10 @@
 mod dye;
 mod game_data;
+mod glamour;
+mod glamour_editor;
 mod mdl_loader;
 mod renderer;
+mod skeleton;
 mod tex_loader;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -15,16 +18,24 @@ use physis::stm::StainingTemplate;
 use renderer::{Camera, ModelRenderer};
 use tex_loader::CachedMaterial;
 
+// ── 页面路由 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppPage {
+    Browser,
+    GlamourManager,
+}
+
 // ── 视图模式 & 排序 ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ViewMode {
+pub(crate) enum ViewMode {
     List,
     SetGroup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SortOrder {
+pub(crate) enum SortOrder {
     ByName,
     BySetId,
     BySlot,
@@ -42,10 +53,10 @@ impl SortOrder {
 
 // ── 套装分组 ──
 
-struct EquipmentSet {
-    set_id: u16,
-    display_name: String,
-    item_indices: Vec<usize>,
+pub(crate) struct EquipmentSet {
+    pub(crate) set_id: u16,
+    pub(crate) display_name: String,
+    pub(crate) item_indices: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -111,7 +122,7 @@ fn build_equipment_sets(items: &[EquipmentItem]) -> Vec<EquipmentSet> {
         .collect()
 }
 
-const ALL_SLOTS: [EquipSlot; 5] = [
+pub(crate) const ALL_SLOTS: [EquipSlot; 5] = [
     EquipSlot::Head,
     EquipSlot::Body,
     EquipSlot::Gloves,
@@ -120,6 +131,9 @@ const ALL_SLOTS: [EquipSlot; 5] = [
 ];
 
 struct App {
+    // 页面路由
+    current_page: AppPage,
+    // 装备数据
     items: Vec<EquipmentItem>,
     search: String,
     selected_slot: Option<EquipSlot>,
@@ -152,6 +166,14 @@ struct App {
     selected_shade: u8,
     is_dual_dye: bool,
     needs_rebake: bool,
+    // 幻化管理
+    glamour_sets: Vec<glamour::GlamourSet>,
+    item_id_map: HashMap<u32, usize>,
+    new_glamour_name: String,
+    renaming_glamour_idx: Option<usize>,
+    rename_buffer: String,
+    glamour_editor: Option<glamour_editor::GlamourEditor>,
+    editing_glamour_idx: Option<usize>,
 }
 
 impl App {
@@ -169,7 +191,14 @@ impl App {
             .enumerate()
             .map(|(i, s)| (s.set_id, i))
             .collect();
+        let item_id_map: HashMap<u32, usize> = items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (item.row_id, i))
+            .collect();
+        let glamour_sets = glamour::load_all_glamour_sets();
         Self {
+            current_page: AppPage::Browser,
             items,
             search: String::new(),
             selected_slot: None,
@@ -197,6 +226,13 @@ impl App {
             selected_shade: 2,
             is_dual_dye: false,
             needs_rebake: false,
+            glamour_sets,
+            item_id_map,
+            new_glamour_name: String::new(),
+            renaming_glamour_idx: None,
+            rename_buffer: String::new(),
+            glamour_editor: None,
+            editing_glamour_idx: None,
         }
     }
 
@@ -371,6 +407,188 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 顶层 Tab 栏
+        egui::TopBottomPanel::top("top_tab_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.current_page, AppPage::Browser, "装备浏览器");
+                ui.selectable_value(&mut self.current_page, AppPage::GlamourManager, "幻化管理");
+            });
+        });
+
+        match self.current_page {
+            AppPage::Browser => self.show_browser_page(ctx),
+            AppPage::GlamourManager => self.show_glamour_manager_page(ctx),
+        }
+    }
+}
+
+impl App {
+    fn show_glamour_manager_page(&mut self, ctx: &egui::Context) {
+        // 如果编辑器打开，使用 take/put-back 模式
+        if let Some(mut editor) = self.glamour_editor.take() {
+            let app_ctx = glamour_editor::AppContext {
+                items: &self.items,
+                item_id_map: &self.item_id_map,
+                stains: &self.stains,
+                stm: self.stm.as_ref(),
+                game: &self.game,
+                equipment_sets: &self.equipment_sets,
+                set_id_to_set_idx: &self.set_id_to_set_idx,
+            };
+            let action = editor.show(ctx, &app_ctx);
+            match action {
+                glamour_editor::GlamourEditorAction::Save => {
+                    // 同步回 glamour_set 列表并保存
+                    if let Some(idx) = self.editing_glamour_idx {
+                        self.glamour_sets[idx] = editor.glamour_set.clone();
+                        if let Err(e) = glamour::save_glamour_set(&self.glamour_sets[idx]) {
+                            eprintln!("保存失败: {}", e);
+                        }
+                    }
+                    editor.dirty = false;
+                    self.glamour_editor = Some(editor);
+                }
+                glamour_editor::GlamourEditorAction::Close => {
+                    // 关闭编辑器
+                    self.glamour_editor = None;
+                    self.editing_glamour_idx = None;
+                }
+                glamour_editor::GlamourEditorAction::None => {
+                    self.glamour_editor = Some(editor);
+                }
+            }
+            return;
+        }
+
+        // 列表页
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("幻化管理");
+            ui.separator();
+
+            // 新建区域
+            ui.horizontal(|ui| {
+                ui.label("名称:");
+                ui.text_edit_singleline(&mut self.new_glamour_name);
+                if ui.button("新建").clicked() && !self.new_glamour_name.trim().is_empty() {
+                    let gs = glamour::GlamourSet::new(self.new_glamour_name.trim());
+                    if let Err(e) = glamour::save_glamour_set(&gs) {
+                        eprintln!("保存失败: {}", e);
+                    }
+                    self.glamour_sets.push(gs);
+                    self.new_glamour_name.clear();
+                }
+            });
+
+            ui.separator();
+
+            if self.glamour_sets.is_empty() {
+                ui.label("暂无幻化组合，请新建一个。");
+                return;
+            }
+
+            // 列表
+            let mut delete_idx: Option<usize> = None;
+            let mut edit_idx: Option<usize> = None;
+            let mut confirm_rename: Option<usize> = None;
+            let mut start_rename: Option<(usize, String)> = None;
+
+            // 预计算摘要以避免借用冲突
+            let summaries: Vec<(String, usize, String)> = self.glamour_sets.iter()
+                .map(|gs| (gs.name.clone(), gs.slot_count(), self.glamour_slot_summary(gs)))
+                .collect();
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for i in 0..summaries.len() {
+                    ui.horizontal(|ui| {
+                        if self.renaming_glamour_idx == Some(i) {
+                            ui.text_edit_singleline(&mut self.rename_buffer);
+                            if ui.button("确定").clicked() || ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                                confirm_rename = Some(i);
+                            }
+                            if ui.button("取消").clicked() {
+                                self.renaming_glamour_idx = None;
+                            }
+                        } else {
+                            let (name, slot_count, slot_summary) = &summaries[i];
+                            ui.label(egui::RichText::new(name).strong());
+                            ui.label(format!("({}/5 槽位)", slot_count));
+                            if !slot_summary.is_empty() {
+                                ui.label(slot_summary);
+                            }
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.small_button("删除").clicked() {
+                                    delete_idx = Some(i);
+                                }
+                                if ui.small_button("重命名").clicked() {
+                                    start_rename = Some((i, name.clone()));
+                                }
+                                if ui.small_button("编辑").clicked() {
+                                    edit_idx = Some(i);
+                                }
+                            });
+                        }
+                    });
+                    ui.separator();
+                }
+            });
+
+            // 处理延迟操作
+            if let Some((idx, name)) = start_rename {
+                self.renaming_glamour_idx = Some(idx);
+                self.rename_buffer = name;
+            }
+
+            if let Some(idx) = confirm_rename {
+                let new_name = self.rename_buffer.trim().to_string();
+                if !new_name.is_empty() {
+                    self.glamour_sets[idx].name = new_name;
+                    if let Err(e) = glamour::save_glamour_set(&self.glamour_sets[idx]) {
+                        eprintln!("保存失败: {}", e);
+                    }
+                }
+                self.renaming_glamour_idx = None;
+            }
+
+            // 处理删除
+            if let Some(idx) = delete_idx {
+                let id = self.glamour_sets[idx].id.clone();
+                if let Err(e) = glamour::delete_glamour_set(&id) {
+                    eprintln!("删除失败: {}", e);
+                }
+                self.glamour_sets.remove(idx);
+                if self.renaming_glamour_idx == Some(idx) {
+                    self.renaming_glamour_idx = None;
+                }
+            }
+
+            // 打开编辑器
+            if let Some(idx) = edit_idx {
+                let gs = self.glamour_sets[idx].clone();
+                self.glamour_editor = Some(glamour_editor::GlamourEditor::new(
+                    gs,
+                    self.render_state.clone(),
+                ));
+                self.editing_glamour_idx = Some(idx);
+            }
+        });
+    }
+
+    fn glamour_slot_summary(&self, gs: &glamour::GlamourSet) -> String {
+        let mut parts = Vec::new();
+        for slot in &ALL_SLOTS {
+            if let Some(gslot) = gs.get_slot(*slot) {
+                let name = self.item_id_map.get(&gslot.item_id)
+                    .and_then(|&idx| self.items.get(idx))
+                    .map(|item| item.name.as_str())
+                    .unwrap_or("???");
+                parts.push(format!("[{}]{}", slot.slot_abbr(), name));
+            }
+        }
+        parts.join(" ")
+    }
+
+    fn show_browser_page(&mut self, ctx: &egui::Context) {
         // 染色重烘焙 (在 UI 借用之前执行)
         if self.needs_rebake {
             self.needs_rebake = false;

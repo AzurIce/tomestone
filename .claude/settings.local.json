@@ -42,7 +42,8 @@
       "WebFetch(domain:xivapi.com)",
       "mcp__imhex-pattern-doc__searchDocumentation",
       "Bash(grep:*)",
-      "Bash(xxd:*)"
+      "Bash(xxd:*)",
+      "Bash(git config:*)"
     ],
     "additionalDirectories": [
       "E:\\_ff14"

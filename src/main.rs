@@ -1,8 +1,11 @@
+mod data_dir;
 mod dye;
 mod game_data;
 mod glamour;
 mod glamour_editor;
 mod mdl_loader;
+mod resource_browser;
+mod schema;
 mod skeleton;
 mod tex_loader;
 
@@ -22,6 +25,7 @@ use tomestone_render::{BoundingBox, Camera, ModelRenderer};
 pub(crate) enum AppPage {
     Browser,
     GlamourManager,
+    ResourceBrowser,
 }
 
 // ── 视图模式 & 排序 ──
@@ -172,6 +176,8 @@ struct App {
     rename_buffer: String,
     glamour_editor: Option<glamour_editor::GlamourEditor>,
     editing_glamour_idx: Option<usize>,
+    // 资源浏览器
+    resource_browser: resource_browser::ResourceBrowserState,
 }
 
 impl App {
@@ -195,6 +201,7 @@ impl App {
             .map(|(i, item)| (item.row_id, i))
             .collect();
         let glamour_sets = glamour::load_all_glamour_sets();
+        let resource_browser = resource_browser::ResourceBrowserState::new(&game);
         Self {
             current_page: AppPage::Browser,
             items,
@@ -231,6 +238,7 @@ impl App {
             rename_buffer: String::new(),
             glamour_editor: None,
             editing_glamour_idx: None,
+            resource_browser,
         }
     }
 
@@ -411,12 +419,14 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.current_page, AppPage::Browser, "装备浏览器");
                 ui.selectable_value(&mut self.current_page, AppPage::GlamourManager, "幻化管理");
+                ui.selectable_value(&mut self.current_page, AppPage::ResourceBrowser, "EXD 浏览器");
             });
         });
 
         match self.current_page {
             AppPage::Browser => self.show_browser_page(ctx),
             AppPage::GlamourManager => self.show_glamour_manager_page(ctx),
+            AppPage::ResourceBrowser => self.resource_browser.show(ctx, &self.game),
         }
     }
 }

@@ -17,10 +17,13 @@ wgpu.workspace = true
 bytemuck.workspace = true
 eframe = { version = "0.33", features = ["wgpu"] }
 egui-wgpu = "0.33"
+egui_table = "0.6"
 physis = { git = "https://github.com/AzurIce/physis.git" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 glam = "0.29"
+serde_yml = "0.0.12"
+ureq = "3"
 
 [profile.dev]
 overflow-checks = false

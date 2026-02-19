@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use physis::excel::{Field, Row};
 use physis::mtrl::{ColorDyeTable, ColorTable};
@@ -147,6 +147,7 @@ pub struct StainEntry {
 
 /// 游戏数据访问层
 pub struct GameData {
+    game_dir: PathBuf,
     physis: RefCell<SqPackResource>,
 }
 
@@ -154,7 +155,11 @@ impl GameData {
     pub fn new(install_dir: &Path) -> Self {
         let game_dir = install_dir.join("game");
         let physis = RefCell::new(SqPackResource::from_existing(game_dir.to_str().unwrap()));
-        Self { physis }
+        Self { game_dir, physis }
+    }
+
+    pub fn sqpack_dir(&self) -> PathBuf {
+        self.game_dir.join("sqpack")
     }
 
     /// 读取原始文件字节
@@ -203,6 +208,32 @@ impl GameData {
             race_code, race_code
         );
         self.physis.borrow_mut().parsed(&path).ok()
+    }
+
+    /// 获取所有 EXD 表名
+    pub fn get_all_sheet_names(&self) -> Vec<String> {
+        self.physis
+            .borrow_mut()
+            .get_all_sheet_names()
+            .unwrap_or_default()
+    }
+
+    /// 读取表头 (EXH)
+    pub fn read_excel_header(&self, name: &str) -> Option<physis::exh::EXH> {
+        self.physis.borrow_mut().read_excel_sheet_header(name).ok()
+    }
+
+    /// 读取表数据 (Sheet)
+    pub fn read_excel_sheet(
+        &self,
+        exh: &physis::exh::EXH,
+        name: &str,
+        language: Language,
+    ) -> Option<physis::excel::Sheet> {
+        self.physis
+            .borrow_mut()
+            .read_excel_sheet(exh, name, language)
+            .ok()
     }
 
     /// 加载所有可装备的防具物品

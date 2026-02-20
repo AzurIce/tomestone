@@ -31,3 +31,6 @@ egui_kittest = { version = "0.33", features = ["wgpu", "snapshot"] }
 
 [profile.dev]
 overflow-checks = false
+
+[profile.dev.package."*"]
+opt-level = 3

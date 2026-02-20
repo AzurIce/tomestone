@@ -1,17 +1,20 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use eframe::egui;
 use physis::stm::StainingTemplate;
 
 use super::GlamourSet;
-use crate::domain::{EquipSlot, EquipmentItem, EquipmentSet, SortOrder, ALL_SLOTS, RACE_CODES};
+use crate::domain::{
+    EquipSlot, EquipmentItem, EquipmentSet, ACCESSORY_SLOTS, ALL_SLOTS, GEAR_SLOTS, RACE_CODES,
+};
 use crate::dye::{apply_dye, has_dual_dye};
 use crate::game::{
     apply_skinning, bake_color_table_texture, compute_bounding_box, load_mdl, load_mesh_textures,
     CachedMaterial, GameData, MeshData, SkeletonCache,
 };
 use crate::ui::components::dye_palette::show_dye_palette;
+use crate::ui::components::equipment_list::{EquipmentListState, HighlightConfig};
 use crate::ui::components::viewport::ViewportState;
 
 pub struct AppContext<'a> {
@@ -54,8 +57,7 @@ pub struct GlamourEditor {
     pub glamour_set: GlamourSet,
     pub active_slot: EquipSlot,
 
-    search: String,
-    sort_order: SortOrder,
+    equipment_list: EquipmentListState,
 
     selected_stain_ids: HashMap<EquipSlot, [u32; 2]>,
     active_dye_channel: usize,
@@ -68,6 +70,18 @@ pub struct GlamourEditor {
     pub dirty: bool,
 
     skeleton_cache: SkeletonCache,
+
+    // 右侧详情面板的单件预览视口
+    detail_viewport: ViewportState,
+    detail_loaded_item_id: Option<u32>,
+    detail_cached_materials: HashMap<u16, CachedMaterial>,
+    detail_cached_meshes: Vec<MeshData>,
+    detail_needs_rebuild: bool,
+    detail_needs_rebake: bool,
+
+    // 预览状态: 点击左侧列表时设置，尚未装备
+    preview_item_id: Option<u32>,
+    preview_stain_ids: [u32; 2],
 }
 
 impl GlamourEditor {
@@ -81,11 +95,12 @@ impl GlamourEditor {
             selected_stain_ids.insert(*slot, stain_ids);
         }
 
+        let detail_viewport = ViewportState::new(render_state.clone());
+
         Self {
             glamour_set,
             active_slot: EquipSlot::Body,
-            search: String::new(),
-            sort_order: SortOrder::ByName,
+            equipment_list: EquipmentListState::new(),
             selected_stain_ids,
             active_dye_channel: 0,
             selected_shade: 2,
@@ -95,6 +110,14 @@ impl GlamourEditor {
             needs_rebake: false,
             dirty: false,
             skeleton_cache: SkeletonCache::new(),
+            detail_viewport,
+            detail_loaded_item_id: None,
+            detail_cached_materials: HashMap::new(),
+            detail_cached_meshes: Vec::new(),
+            detail_needs_rebuild: false,
+            detail_needs_rebake: false,
+            preview_item_id: None,
+            preview_stain_ids: [0, 0],
         }
     }
 
@@ -305,9 +328,112 @@ impl GlamourEditor {
         );
     }
 
+    fn rebuild_detail_viewport(&mut self, item: &EquipmentItem, game: &GameData) {
+        self.detail_needs_rebuild = false;
+        self.detail_loaded_item_id = Some(item.row_id);
+
+        let paths = item.model_paths();
+        let mut loaded = None;
+        for path in &paths {
+            if let Ok(result) = load_mdl(game, path) {
+                if !result.meshes.is_empty() {
+                    loaded = Some(result);
+                    break;
+                }
+            }
+        }
+
+        match loaded {
+            Some(result) => {
+                let load_result = load_mesh_textures(
+                    game,
+                    &result.material_names,
+                    &result.meshes,
+                    item.set_id,
+                    item.variant_id,
+                );
+                let geometry: Vec<(&[tomestone_render::Vertex], &[u16])> = result
+                    .meshes
+                    .iter()
+                    .map(|m| (m.vertices.as_slice(), m.indices.as_slice()))
+                    .collect();
+                self.detail_viewport.model_renderer.set_mesh_data(
+                    &self.detail_viewport.render_state.device,
+                    &self.detail_viewport.render_state.queue,
+                    &geometry,
+                    &load_result.mesh_textures,
+                );
+                self.detail_cached_materials = load_result.materials;
+                self.detail_cached_meshes = result.meshes;
+                let bbox = compute_bounding_box(&self.detail_cached_meshes);
+                self.detail_viewport.camera.focus_on(&bbox);
+                self.detail_viewport.last_bbox = Some(bbox);
+                self.detail_viewport.free_texture();
+            }
+            None => {
+                self.detail_viewport.model_renderer.set_mesh_data(
+                    &self.detail_viewport.render_state.device,
+                    &self.detail_viewport.render_state.queue,
+                    &[],
+                    &[],
+                );
+                self.detail_cached_materials.clear();
+                self.detail_cached_meshes.clear();
+                self.detail_viewport.last_bbox = None;
+            }
+        }
+    }
+
+    fn rebake_detail_textures(&mut self, stm: &StainingTemplate) {
+        self.detail_needs_rebake = false;
+
+        // 预览模式使用 preview_stain_ids，已装备模式使用 selected_stain_ids
+        let stain_ids = if self.preview_item_id.is_some() {
+            self.preview_stain_ids
+        } else {
+            let slot = self.active_slot;
+            self.selected_stain_ids
+                .get(&slot)
+                .copied()
+                .unwrap_or([0, 0])
+        };
+
+        let mut new_textures: Vec<Option<tomestone_render::TextureData>> = Vec::new();
+        for mesh in &self.detail_cached_meshes {
+            let mat_idx = mesh.material_index;
+            if let Some(cached) = self.detail_cached_materials.get(&mat_idx) {
+                if cached.uses_color_table {
+                    if let (Some(color_table), Some(id_tex)) =
+                        (&cached.color_table, &cached.id_texture)
+                    {
+                        let dyed_colors = if stain_ids[0] > 0 || stain_ids[1] > 0 {
+                            cached
+                                .color_dye_table
+                                .as_ref()
+                                .map(|dye_table| apply_dye(color_table, dye_table, stm, stain_ids))
+                        } else {
+                            None
+                        };
+                        let baked =
+                            bake_color_table_texture(id_tex, color_table, dyed_colors.as_ref());
+                        new_textures.push(Some(baked));
+                        continue;
+                    }
+                }
+            }
+            new_textures.push(None);
+        }
+        self.detail_viewport.model_renderer.update_textures(
+            &self.detail_viewport.render_state.device,
+            &self.detail_viewport.render_state.queue,
+            &new_textures,
+        );
+    }
+
     pub fn show(&mut self, ctx: &egui::Context, app: &AppContext<'_>) -> GlamourEditorAction {
         if self.needs_mesh_rebuild {
             self.rebuild_merged_meshes(app.items, app.item_id_map, app.game);
+            self.detail_needs_rebuild = true;
         }
 
         if self.needs_rebake {
@@ -319,99 +445,177 @@ impl GlamourEditor {
                     }
                 }
             }
+            self.detail_needs_rebake = true;
+        }
+
+        // 更新详情视口: 优先显示预览物品，否则显示当前槽位已装备物品
+        let detail_target_id = self.preview_item_id.or_else(|| {
+            self.glamour_set
+                .get_slot(self.active_slot)
+                .map(|s| s.item_id)
+        });
+        if self.detail_needs_rebuild || self.detail_loaded_item_id != detail_target_id {
+            if let Some(item_id) = detail_target_id {
+                if let Some(&idx) = app.item_id_map.get(&item_id) {
+                    if let Some(item) = app.items.get(idx) {
+                        self.rebuild_detail_viewport(item, app.game);
+                    }
+                }
+            } else {
+                self.detail_loaded_item_id = None;
+                self.detail_viewport.model_renderer.set_mesh_data(
+                    &self.detail_viewport.render_state.device,
+                    &self.detail_viewport.render_state.queue,
+                    &[],
+                    &[],
+                );
+                self.detail_cached_materials.clear();
+                self.detail_cached_meshes.clear();
+                self.detail_viewport.last_bbox = None;
+                self.detail_needs_rebuild = false;
+            }
+        }
+
+        if self.detail_needs_rebake {
+            self.detail_needs_rebake = false;
+            if let Some(stm) = app.stm {
+                self.rebake_detail_textures(stm);
+            }
         }
 
         let mut action = GlamourEditorAction::None;
 
+        // ── 左侧: 装备列表 (不按槽位筛选) ──
         egui::SidePanel::left("glamour_equip_list")
             .default_width(300.0)
             .show(ctx, |ui| {
-                ui.heading(format!("选择装备 - {}", self.active_slot.display_name()));
+                ui.heading("选择装备");
                 ui.separator();
 
-                ui.horizontal(|ui| {
-                    ui.label("搜索:");
-                    ui.text_edit_singleline(&mut self.search);
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("排序:");
-                    egui::ComboBox::from_id_salt("glamour_sort_order")
-                        .selected_text(self.sort_order.label())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.sort_order,
-                                SortOrder::ByName,
-                                SortOrder::ByName.label(),
-                            );
-                            ui.selectable_value(
-                                &mut self.sort_order,
-                                SortOrder::BySetId,
-                                SortOrder::BySetId.label(),
-                            );
-                        });
-                });
-
-                ui.separator();
-
-                let slot = self.active_slot;
-                let search_lower = self.search.to_lowercase();
-                let mut filtered: Vec<(usize, &EquipmentItem)> = app
-                    .items
+                // 收集所有已装备的 item_id 用于高亮
+                let equipped_ids: HashSet<u32> = ALL_SLOTS
                     .iter()
-                    .enumerate()
-                    .filter(|(_, item)| {
-                        item.slot == slot
-                            && (search_lower.is_empty()
-                                || item.name.to_lowercase().contains(&search_lower))
-                    })
+                    .filter_map(|slot| self.glamour_set.get_slot(*slot).map(|s| s.item_id))
                     .collect();
-                match self.sort_order {
-                    SortOrder::ByName => filtered.sort_by(|a, b| a.1.name.cmp(&b.1.name)),
-                    SortOrder::BySetId => filtered.sort_by(|a, b| a.1.set_id.cmp(&b.1.set_id)),
-                    SortOrder::BySlot => filtered.sort_by(|a, b| a.1.name.cmp(&b.1.name)),
-                }
 
-                ui.label(format!("{} 件", filtered.len()));
+                let highlight = HighlightConfig {
+                    highlighted_ids: &equipped_ids,
+                    preview_id: self.preview_item_id,
+                };
 
-                let current_item_id = self.glamour_set.get_slot(slot).map(|s| s.item_id);
-
-                egui::ScrollArea::vertical().show_rows(
+                if let Some(clicked) = self.equipment_list.show(
                     ui,
-                    18.0,
-                    filtered.len(),
-                    |ui, row_range| {
-                        for row_idx in row_range {
-                            if let Some(&(_global_idx, ref item)) = filtered.get(row_idx) {
-                                let selected = current_item_id == Some(item.row_id);
-                                let label = format!("[e{:04}] {}", item.set_id, item.name);
-                                if ui.selectable_label(selected, &label).clicked() {
-                                    self.assign_item_to_slot(slot, item);
-                                }
-                            }
-                        }
-                    },
-                );
+                    app.items,
+                    app.equipment_sets,
+                    app.set_id_to_set_idx,
+                    None, // 不按槽位筛选
+                    &highlight,
+                    "glamour",
+                ) {
+                    self.preview_item_id = Some(clicked.item_id);
+                    self.preview_stain_ids = [0, 0];
+                    self.active_slot = clicked.slot;
+                }
             });
 
+        // ── 右侧: 当前槽位装备详情 ──
         egui::SidePanel::right("glamour_info_panel")
-            .default_width(250.0)
+            .default_width(280.0)
             .show(ctx, |ui| {
                 let slot = self.active_slot;
-                if let Some(gslot) = self.glamour_set.get_slot(slot) {
+                ui.heading(slot.display_name());
+                ui.separator();
+
+                if let Some(preview_id) = self.preview_item_id {
+                    // ── 预览模式 ──
+                    if let Some(&idx) = app.item_id_map.get(&preview_id) {
+                        if let Some(item) = app.items.get(idx) {
+                            ui.label(
+                                egui::RichText::new("预览")
+                                    .color(egui::Color32::from_rgb(100, 200, 255)),
+                            );
+                            ui.label(egui::RichText::new(&item.name).strong().size(14.0));
+                            let prefix = if item.is_accessory() { "a" } else { "e" };
+                            ui.label(format!(
+                                "{}{:04} v{:04}",
+                                prefix, item.set_id, item.variant_id
+                            ));
+
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("装备").clicked() {
+                                    // 将预览物品装备到对应槽位
+                                    let target_slot = item.slot;
+                                    let stain_ids = self.preview_stain_ids;
+                                    self.glamour_set
+                                        .set_slot(target_slot, item.row_id, stain_ids);
+                                    self.selected_stain_ids.insert(target_slot, stain_ids);
+                                    self.needs_mesh_rebuild = true;
+                                    self.dirty = true;
+                                    self.preview_item_id = None;
+                                    self.preview_stain_ids = [0, 0];
+                                }
+                                if ui.button("取消").clicked() {
+                                    self.preview_item_id = None;
+                                    self.preview_stain_ids = [0, 0];
+                                }
+                            });
+
+                            // 预览染色控制 (临时，使用 preview_stain_ids)
+                            ui.separator();
+                            let has_dyeable = !self.detail_cached_materials.is_empty()
+                                && self
+                                    .detail_cached_materials
+                                    .values()
+                                    .any(|m| m.uses_color_table);
+
+                            if has_dyeable {
+                                let is_dual = has_dual_dye(&self.detail_cached_materials);
+                                let changed = show_dye_palette(
+                                    ui,
+                                    app.stains,
+                                    &mut self.preview_stain_ids,
+                                    &mut self.active_dye_channel,
+                                    &mut self.selected_shade,
+                                    is_dual,
+                                );
+                                if changed {
+                                    self.detail_needs_rebake = true;
+                                }
+                            } else {
+                                ui.label("此装备不支持染色");
+                            }
+
+                            // 单件预览视口
+                            ui.separator();
+                            ui.label(egui::RichText::new("单件预览").strong());
+                            let vp_size = ui.available_height().max(150.0).min(250.0);
+                            ui.allocate_ui(egui::vec2(ui.available_width(), vp_size), |ui| {
+                                self.detail_viewport.show(ui, ctx, "");
+                            });
+                        }
+                    }
+                } else if let Some(gslot) = self.glamour_set.get_slot(slot) {
+                    // ── 已装备模式 ──
                     let item_id = gslot.item_id;
                     if let Some(&idx) = app.item_id_map.get(&item_id) {
                         if let Some(item) = app.items.get(idx) {
-                            ui.heading(&item.name);
-                            ui.label(format!("e{:04} v{:04}", item.set_id, item.variant_id));
-                            ui.separator();
+                            ui.label(egui::RichText::new(&item.name).strong().size(14.0));
+                            let prefix = if item.is_accessory() { "a" } else { "e" };
+                            ui.label(format!(
+                                "{}{:04} v{:04}",
+                                prefix, item.set_id, item.variant_id
+                            ));
 
-                            if ui.button("移除此槽位").clicked() {
+                            ui.add_space(4.0);
+                            if ui.button("卸下").clicked() {
                                 self.glamour_set.remove_slot(slot);
                                 self.needs_mesh_rebuild = true;
+                                self.detail_needs_rebuild = true;
                                 self.dirty = true;
                             }
 
+                            // 同套装快捷操作
                             if let Some(&set_idx) = app.set_id_to_set_idx.get(&item.set_id) {
                                 let eq_set = &app.equipment_sets[set_idx];
                                 if eq_set.item_indices.len() > 1 {
@@ -458,7 +662,9 @@ impl GlamourEditor {
 
                                     if let Some((sib_idx, sib_slot)) = clicked_sibling {
                                         if let Some(sib_item) = app.items.get(sib_idx) {
-                                            self.assign_item_to_slot(sib_slot, sib_item);
+                                            // 同套装兄弟件也走预览流程
+                                            self.preview_item_id = Some(sib_item.row_id);
+                                            self.preview_stain_ids = [0, 0];
                                             self.active_slot = sib_slot;
                                         }
                                     }
@@ -487,6 +693,7 @@ impl GlamourEditor {
                                 }
                             }
 
+                            // 染色控制 (持久化到 glamour set)
                             ui.separator();
 
                             let has_dyeable = self
@@ -520,18 +727,30 @@ impl GlamourEditor {
                                     }
                                     self.dirty = true;
                                     self.needs_rebake = true;
+                                    self.detail_needs_rebake = true;
                                 }
                             } else {
                                 ui.label("此装备不支持染色");
                             }
+
+                            // 单件装备预览视口
+                            ui.separator();
+                            ui.label(egui::RichText::new("单件预览").strong());
+                            let vp_size = ui.available_height().max(150.0).min(250.0);
+                            ui.allocate_ui(egui::vec2(ui.available_width(), vp_size), |ui| {
+                                self.detail_viewport.show(ui, ctx, "");
+                            });
                         }
                     }
                 } else {
+                    // ── 空槽位模式 ──
                     ui.label(format!("{}: 空", slot.display_name()));
+                    ui.add_space(8.0);
                     ui.label("从左侧列表选择装备");
                 }
             });
 
+        // ── 中央: 标题栏 + 槽位选择 + 合并预览视口 ──
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 let title = if self.dirty {
@@ -554,7 +773,8 @@ impl GlamourEditor {
             ui.separator();
 
             ui.horizontal(|ui| {
-                for slot in &ALL_SLOTS {
+                ui.label("装备:");
+                for slot in &GEAR_SLOTS {
                     let has_item = self.glamour_set.get_slot(*slot).is_some();
                     let label = if has_item {
                         format!("{} ●", slot.display_name())
@@ -566,6 +786,28 @@ impl GlamourEditor {
                         .clicked()
                     {
                         self.active_slot = *slot;
+                        self.preview_item_id = None;
+                        self.preview_stain_ids = [0, 0];
+                    }
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("饰品:");
+                for slot in &ACCESSORY_SLOTS {
+                    let has_item = self.glamour_set.get_slot(*slot).is_some();
+                    let label = if has_item {
+                        format!("{} ●", slot.display_name())
+                    } else {
+                        slot.display_name().to_string()
+                    };
+                    if ui
+                        .selectable_label(self.active_slot == *slot, &label)
+                        .clicked()
+                    {
+                        self.active_slot = *slot;
+                        self.preview_item_id = None;
+                        self.preview_stain_ids = [0, 0];
                     }
                 }
             });
@@ -576,16 +818,5 @@ impl GlamourEditor {
         });
 
         action
-    }
-
-    fn assign_item_to_slot(&mut self, slot: EquipSlot, item: &EquipmentItem) {
-        let stain_ids = self
-            .selected_stain_ids
-            .get(&slot)
-            .copied()
-            .unwrap_or([0, 0]);
-        self.glamour_set.set_slot(slot, item.row_id, stain_ids);
-        self.needs_mesh_rebuild = true;
-        self.dirty = true;
     }
 }

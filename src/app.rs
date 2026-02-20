@@ -1,14 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
 use eframe::egui;
 
 use crate::config;
-use crate::domain::{EquipSlot, FlatRow, SortOrder, ViewMode};
-use crate::game::{CachedMaterial, MeshData};
+use crate::domain::EquipSlot;
+use crate::game::{CachedMaterial, GameData, MeshData};
 use crate::glamour;
 use crate::loading::*;
+use crate::ui::components::equipment_list::EquipmentListState;
 use crate::ui::components::viewport::ViewportState;
 use crate::ui::components::{show_progress_bar, ProgressTracker};
 
@@ -31,14 +32,9 @@ pub struct App {
     pub viewport: ViewportState,
     pub game_state: Option<GameState>,
     pub current_page: crate::domain::AppPage,
-    pub search: String,
+    pub equipment_list: EquipmentListState,
     pub selected_slot: Option<EquipSlot>,
     pub selected_item: Option<usize>,
-    pub view_mode: ViewMode,
-    pub sort_order: SortOrder,
-    pub expanded_sets: HashSet<u16>,
-    pub cached_flat_rows: Vec<FlatRow>,
-    pub flat_rows_dirty: bool,
     pub cached_materials: HashMap<u16, CachedMaterial>,
     pub cached_meshes: Vec<MeshData>,
     pub loaded_model_idx: Option<usize>,
@@ -55,6 +51,7 @@ pub struct App {
     pub test_progress: ProgressTracker,
     pub test_total: u64,
     pub test_current: u64,
+    pub icon_cache: HashMap<u32, egui::TextureHandle>,
 }
 
 impl App {
@@ -86,14 +83,9 @@ impl App {
             viewport,
             game_state: None,
             current_page: crate::domain::AppPage::Browser,
-            search: String::new(),
+            equipment_list: EquipmentListState::new(),
             selected_slot: None,
             selected_item: None,
-            view_mode: ViewMode::List,
-            sort_order: SortOrder::ByName,
-            expanded_sets: HashSet::new(),
-            cached_flat_rows: Vec::new(),
-            flat_rows_dirty: true,
             loaded_model_idx: None,
             cached_materials: HashMap::new(),
             cached_meshes: Vec::new(),
@@ -110,7 +102,45 @@ impl App {
             test_progress: ProgressTracker::new(),
             test_total: 100,
             test_current: 0,
+            icon_cache: HashMap::new(),
         }
+    }
+
+    pub fn get_or_load_icon(
+        &mut self,
+        ctx: &egui::Context,
+        gs: &GameData,
+        icon_id: u32,
+    ) -> Option<egui::TextureHandle> {
+        if icon_id == 0 {
+            return None;
+        }
+
+        if let Some(handle) = self.icon_cache.get(&icon_id) {
+            return Some(handle.clone());
+        }
+
+        let tex_data = gs.load_icon(icon_id)?;
+        let size = [tex_data.width as _, tex_data.height as _];
+        let pixels: Vec<egui::Color32> = tex_data
+            .rgba
+            .chunks_exact(4)
+            .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+            .collect();
+
+        let color_image = egui::ColorImage {
+            size,
+            pixels,
+            source_size: egui::Vec2::new(40.0, 40.0),
+        };
+        let handle = ctx.load_texture(
+            format!("icon_{}", icon_id),
+            color_image,
+            egui::TextureOptions::default(),
+        );
+
+        self.icon_cache.insert(icon_id, handle.clone());
+        Some(handle)
     }
 
     pub fn start_loading(&mut self, install_dir: PathBuf) {
@@ -162,7 +192,6 @@ impl App {
         match transition {
             Some(Ok(data)) => {
                 self.game_state = Some(GameState::from_loaded_data(*data));
-                self.flat_rows_dirty = true;
                 self.phase = AppPhase::Ready;
             }
             Some(Err(e)) => {

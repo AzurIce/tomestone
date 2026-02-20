@@ -13,12 +13,6 @@ pub enum AppPage {
 // ── 视图模式 & 排序 ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    List,
-    SetGroup,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOrder {
     ByName,
     BySetId,
@@ -44,6 +38,10 @@ pub enum EquipSlot {
     Gloves,
     Legs,
     Feet,
+    Earrings,
+    Necklace,
+    Bracelet,
+    Ring,
 }
 
 impl EquipSlot {
@@ -54,6 +52,10 @@ impl EquipSlot {
             5 => Some(Self::Gloves),
             7 => Some(Self::Legs),
             8 => Some(Self::Feet),
+            9 => Some(Self::Earrings),
+            10 => Some(Self::Necklace),
+            11 => Some(Self::Bracelet),
+            12 => Some(Self::Ring),
             _ => None,
         }
     }
@@ -65,6 +67,10 @@ impl EquipSlot {
             Self::Gloves => "glv",
             Self::Legs => "dwn",
             Self::Feet => "sho",
+            Self::Earrings => "ear",
+            Self::Necklace => "nek",
+            Self::Bracelet => "wrs",
+            Self::Ring => "rir",
         }
     }
 
@@ -75,16 +81,46 @@ impl EquipSlot {
             Self::Gloves => "手部",
             Self::Legs => "腿部",
             Self::Feet => "脚部",
+            Self::Earrings => "耳饰",
+            Self::Necklace => "项链",
+            Self::Bracelet => "手镯",
+            Self::Ring => "戒指",
         }
+    }
+
+    pub fn is_accessory(&self) -> bool {
+        matches!(
+            self,
+            Self::Earrings | Self::Necklace | Self::Bracelet | Self::Ring
+        )
     }
 }
 
-pub const ALL_SLOTS: [EquipSlot; 5] = [
+pub const ALL_SLOTS: [EquipSlot; 9] = [
     EquipSlot::Head,
     EquipSlot::Body,
     EquipSlot::Gloves,
     EquipSlot::Legs,
     EquipSlot::Feet,
+    EquipSlot::Earrings,
+    EquipSlot::Necklace,
+    EquipSlot::Bracelet,
+    EquipSlot::Ring,
+];
+
+pub const GEAR_SLOTS: [EquipSlot; 5] = [
+    EquipSlot::Head,
+    EquipSlot::Body,
+    EquipSlot::Gloves,
+    EquipSlot::Legs,
+    EquipSlot::Feet,
+];
+
+pub const ACCESSORY_SLOTS: [EquipSlot; 4] = [
+    EquipSlot::Earrings,
+    EquipSlot::Necklace,
+    EquipSlot::Bracelet,
+    EquipSlot::Ring,
 ];
 
 // ── 装备物品 ──
@@ -96,26 +132,46 @@ pub struct EquipmentItem {
     pub slot: EquipSlot,
     pub set_id: u16,
     pub variant_id: u16,
+    pub icon_id: u32,
 }
 
 impl EquipmentItem {
     pub fn model_path(&self) -> String {
-        format!(
-            "chara/equipment/e{:04}/model/c0201e{:04}_{}.mdl",
-            self.set_id,
-            self.set_id,
-            self.slot.slot_abbr()
-        )
+        if self.slot.is_accessory() {
+            format!(
+                "chara/accessory/a{:04}/model/c0101a{:04}_{}.mdl",
+                self.set_id,
+                self.set_id,
+                self.slot.slot_abbr()
+            )
+        } else {
+            format!(
+                "chara/equipment/e{:04}/model/c0201e{:04}_{}.mdl",
+                self.set_id,
+                self.set_id,
+                self.slot.slot_abbr()
+            )
+        }
     }
 
     pub fn model_path_for_race(&self, race_code: &str) -> String {
-        format!(
-            "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
-            self.set_id,
-            race_code,
-            self.set_id,
-            self.slot.slot_abbr()
-        )
+        if self.slot.is_accessory() {
+            format!(
+                "chara/accessory/a{:04}/model/{}a{:04}_{}.mdl",
+                self.set_id,
+                race_code,
+                self.set_id,
+                self.slot.slot_abbr()
+            )
+        } else {
+            format!(
+                "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
+                self.set_id,
+                race_code,
+                self.set_id,
+                self.slot.slot_abbr()
+            )
+        }
     }
 
     pub fn model_paths(&self) -> Vec<String> {
@@ -123,6 +179,10 @@ impl EquipmentItem {
             .iter()
             .map(|rc| self.model_path_for_race(rc))
             .collect()
+    }
+
+    pub fn is_accessory(&self) -> bool {
+        self.slot.is_accessory()
     }
 }
 
@@ -137,20 +197,8 @@ pub struct EquipmentSet {
     pub set_id: u16,
     pub display_name: String,
     pub item_indices: Vec<usize>,
-}
-
-#[derive(Clone)]
-pub enum FlatRow {
-    GroupHeader {
-        set_id: u16,
-        display_name: String,
-        item_count: usize,
-        expanded: bool,
-    },
-    Item {
-        global_idx: usize,
-        label: String,
-    },
+    pub has_gear: bool,
+    pub has_accessory: bool,
 }
 
 pub fn longest_common_prefix(strings: &[&str]) -> String {
@@ -192,10 +240,14 @@ pub fn build_equipment_sets(items: &[EquipmentItem]) -> Vec<EquipmentSet> {
         .into_iter()
         .map(|(set_id, item_indices)| {
             let display_name = derive_set_name(items, &item_indices);
+            let has_gear = item_indices.iter().any(|&i| !items[i].is_accessory());
+            let has_accessory = item_indices.iter().any(|&i| items[i].is_accessory());
             EquipmentSet {
                 set_id,
                 display_name,
                 item_indices,
+                has_gear,
+                has_accessory,
             }
         })
         .collect()

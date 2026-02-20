@@ -66,6 +66,10 @@ fn slot_key(slot: EquipSlot) -> &'static str {
         EquipSlot::Gloves => "gloves",
         EquipSlot::Legs => "legs",
         EquipSlot::Feet => "feet",
+        EquipSlot::Earrings => "earrings",
+        EquipSlot::Necklace => "necklace",
+        EquipSlot::Bracelet => "bracelet",
+        EquipSlot::Ring => "ring",
     }
 }
 

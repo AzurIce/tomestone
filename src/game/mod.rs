@@ -221,6 +221,7 @@ impl GameData {
         const COL_EQUIP_SLOT_CATEGORY: usize = 17;
         const COL_MODEL_MAIN: usize = 47;
         const COL_NAME: usize = 0;
+        const COL_ICON: usize = 10;
 
         let equip_cat = match row.columns.get(COL_EQUIP_SLOT_CATEGORY)? {
             Field::UInt8(v) => *v,
@@ -251,12 +252,34 @@ impl GameData {
             _ => return None,
         };
 
+        let icon_id = match row.columns.get(COL_ICON) {
+            Some(Field::UInt16(v)) => *v as u32,
+            Some(Field::UInt32(v)) => *v,
+            _ => 0,
+        };
+
         Some(EquipmentItem {
             row_id,
             name,
             slot,
             set_id,
             variant_id,
+            icon_id,
         })
+    }
+
+    pub fn load_icon(&self, icon_id: u32) -> Option<TextureData> {
+        if icon_id == 0 {
+            return None;
+        }
+        let high = icon_id / 1000;
+        let path = format!("ui/icon/{:03}/{:06}_hr1.tex", high, icon_id);
+
+        if let Some(tex) = self.parsed_tex(&path) {
+            return Some(tex);
+        }
+
+        let fallback_path = format!("ui/icon/{:03}/{:06}.tex", high, icon_id);
+        self.parsed_tex(&fallback_path)
     }
 }

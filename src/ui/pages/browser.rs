@@ -1,14 +1,17 @@
+use std::collections::HashSet;
+
 use eframe::egui;
 use physis::stm::StainingTemplate;
 
 use crate::app::App;
-use crate::domain::{EquipmentItem, FlatRow, SortOrder, ViewMode, ALL_SLOTS};
+use crate::domain::{EquipmentItem, ACCESSORY_SLOTS, GEAR_SLOTS};
 use crate::dye;
 use crate::game::{
     bake_color_table_texture, compute_bounding_box, load_mdl_with_fallback, load_mesh_textures,
 };
 use crate::loading::GameState;
 use crate::ui::components::dye_palette;
+use crate::ui::components::equipment_list::HighlightConfig;
 
 impl App {
     pub fn show_browser_page(&mut self, ctx: &egui::Context, gs: &mut GameState) {
@@ -22,67 +25,10 @@ impl App {
         egui::SidePanel::left("equipment_list")
             .default_width(350.0)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("装备浏览器");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .selectable_label(self.view_mode == ViewMode::SetGroup, "套装")
-                            .clicked()
-                        {
-                            self.view_mode = ViewMode::SetGroup;
-                            self.flat_rows_dirty = true;
-                            if let Some(sel_idx) = self.selected_item {
-                                if let Some(item) = gs.items.get(sel_idx) {
-                                    self.expanded_sets.insert(item.set_id);
-                                }
-                            }
-                        }
-                        if ui
-                            .selectable_label(self.view_mode == ViewMode::List, "列表")
-                            .clicked()
-                        {
-                            self.view_mode = ViewMode::List;
-                        }
-                    });
-                });
+                ui.heading("装备浏览器");
                 ui.separator();
 
-                let prev_search = self.search.clone();
-                ui.horizontal(|ui| {
-                    ui.label("搜索:");
-                    ui.text_edit_singleline(&mut self.search);
-                });
-                if self.search != prev_search {
-                    self.flat_rows_dirty = true;
-                }
-
-                let prev_sort = self.sort_order;
-                ui.horizontal(|ui| {
-                    ui.label("排序:");
-                    egui::ComboBox::from_id_salt("sort_order")
-                        .selected_text(self.sort_order.label())
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.sort_order,
-                                SortOrder::ByName,
-                                SortOrder::ByName.label(),
-                            );
-                            ui.selectable_value(
-                                &mut self.sort_order,
-                                SortOrder::BySetId,
-                                SortOrder::BySetId.label(),
-                            );
-                            ui.selectable_value(
-                                &mut self.sort_order,
-                                SortOrder::BySlot,
-                                SortOrder::BySlot.label(),
-                            );
-                        });
-                });
-                if self.sort_order != prev_sort {
-                    self.flat_rows_dirty = true;
-                }
-
+                // 槽位筛选
                 let prev_slot = self.selected_slot;
                 ui.horizontal(|ui| {
                     if ui
@@ -91,7 +37,24 @@ impl App {
                     {
                         self.selected_slot = None;
                     }
-                    for slot in &ALL_SLOTS {
+                });
+                ui.horizontal(|ui| {
+                    ui.label("装备:");
+                    for slot in &GEAR_SLOTS {
+                        if ui
+                            .selectable_label(
+                                self.selected_slot == Some(*slot),
+                                slot.display_name(),
+                            )
+                            .clicked()
+                        {
+                            self.selected_slot = Some(*slot);
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("饰品:");
+                    for slot in &ACCESSORY_SLOTS {
                         if ui
                             .selectable_label(
                                 self.selected_slot == Some(*slot),
@@ -104,131 +67,42 @@ impl App {
                     }
                 });
                 if self.selected_slot != prev_slot {
-                    self.flat_rows_dirty = true;
+                    // 切换槽位时自动展开当前选中物品所在的套装
+                    if let Some(sel_idx) = self.selected_item {
+                        if let Some(item) = gs.items.get(sel_idx) {
+                            self.equipment_list.expanded_sets.insert(item.set_id);
+                        }
+                    }
                 }
 
                 ui.separator();
 
-                match self.view_mode {
-                    ViewMode::List => {
-                        let filtered: Vec<(usize, String)> = self
-                            .filtered_and_sorted_items(&gs.items)
-                            .into_iter()
-                            .map(|(idx, item)| {
-                                (idx, format!("[{}] {}", item.slot.slot_abbr(), item.name))
-                            })
-                            .collect();
-                        ui.label(format!("{} 件", filtered.len()));
-                        egui::ScrollArea::vertical().show_rows(
-                            ui,
-                            18.0,
-                            filtered.len(),
-                            |ui, row_range| {
-                                for row_idx in row_range {
-                                    if let Some((global_idx, label)) = filtered.get(row_idx) {
-                                        let selected = self.selected_item == Some(*global_idx);
-                                        if ui.selectable_label(selected, label).clicked() {
-                                            self.selected_item = Some(*global_idx);
-                                        }
-                                    }
-                                }
-                            },
-                        );
-                    }
-                    ViewMode::SetGroup => {
-                        if self.flat_rows_dirty {
-                            self.build_flat_rows(gs);
-                        }
-                        let rows = self.cached_flat_rows.clone();
-                        let num_sets = rows
-                            .iter()
-                            .filter(|r| matches!(r, FlatRow::GroupHeader { .. }))
-                            .count();
-                        let num_items = rows
-                            .iter()
-                            .filter(|r| matches!(r, FlatRow::Item { .. }))
-                            .count();
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{} 组套装, {} 件装备", num_sets, num_items));
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if ui.small_button("全部折叠").clicked() {
-                                        self.expanded_sets.clear();
-                                        self.flat_rows_dirty = true;
-                                    }
-                                    if ui.small_button("全部展开").clicked() {
-                                        for eq_set in &gs.equipment_sets {
-                                            self.expanded_sets.insert(eq_set.set_id);
-                                        }
-                                        self.flat_rows_dirty = true;
-                                    }
-                                },
-                            );
-                        });
+                // 高亮当前选中的物品
+                let selected_ids: HashSet<u32> = self
+                    .selected_item
+                    .and_then(|idx| gs.items.get(idx))
+                    .map(|item| {
+                        let mut s = HashSet::new();
+                        s.insert(item.row_id);
+                        s
+                    })
+                    .unwrap_or_default();
 
-                        let mut toggle_set: Option<u16> = None;
-                        let mut select_item: Option<usize> = None;
-                        egui::ScrollArea::vertical().show_rows(
-                            ui,
-                            18.0,
-                            rows.len(),
-                            |ui, row_range| {
-                                for row_idx in row_range {
-                                    if let Some(row) = rows.get(row_idx) {
-                                        match row {
-                                            FlatRow::GroupHeader {
-                                                set_id,
-                                                display_name,
-                                                item_count,
-                                                expanded,
-                                            } => {
-                                                let arrow = if *expanded { "▼" } else { "▶" };
-                                                let text = format!(
-                                                    "{} {} ({}件) e{:04}",
-                                                    arrow, display_name, item_count, set_id
-                                                );
-                                                if ui
-                                                    .selectable_label(
-                                                        false,
-                                                        egui::RichText::new(&text).strong(),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    toggle_set = Some(*set_id);
-                                                }
-                                            }
-                                            FlatRow::Item { global_idx, label } => {
-                                                ui.horizontal(|ui| {
-                                                    ui.add_space(16.0);
-                                                    let selected =
-                                                        self.selected_item == Some(*global_idx);
-                                                    if ui
-                                                        .selectable_label(selected, label)
-                                                        .clicked()
-                                                    {
-                                                        select_item = Some(*global_idx);
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                        );
+                let highlight = HighlightConfig {
+                    highlighted_ids: &selected_ids,
+                    preview_id: None,
+                };
 
-                        if let Some(sid) = toggle_set {
-                            if self.expanded_sets.contains(&sid) {
-                                self.expanded_sets.remove(&sid);
-                            } else {
-                                self.expanded_sets.insert(sid);
-                            }
-                            self.flat_rows_dirty = true;
-                        }
-                        if let Some(idx) = select_item {
-                            self.selected_item = Some(idx);
-                        }
-                    }
+                if let Some(clicked) = self.equipment_list.show(
+                    ui,
+                    &gs.items,
+                    &gs.equipment_sets,
+                    &gs.set_id_to_set_idx,
+                    self.selected_slot,
+                    &highlight,
+                    "browser",
+                ) {
+                    self.selected_item = Some(clicked.global_idx);
                 }
             });
 
@@ -239,14 +113,20 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(idx) = self.selected_item {
                 if let Some(item) = gs.items.get(idx) {
-                    ui.heading(&item.name);
+                    ui.horizontal(|ui| {
+                        if let Some(icon) = self.get_or_load_icon(ctx, &gs.game, item.icon_id) {
+                            ui.image(&icon);
+                        }
+                        ui.heading(&item.name);
+                    });
                     ui.separator();
+                    let prefix = if item.is_accessory() { "a" } else { "e" };
                     egui::Grid::new("item_info").show(ui, |ui| {
                         ui.label("槽位:");
                         ui.label(item.slot.display_name());
                         ui.end_row();
                         ui.label("装备 ID:");
-                        ui.label(format!("e{:04}", item.set_id));
+                        ui.label(format!("{}{:04}", prefix, item.set_id));
                         ui.end_row();
                         ui.label("变体:");
                         ui.label(format!("v{:04}", item.variant_id));
@@ -383,121 +263,6 @@ impl App {
                     &[],
                 );
                 self.viewport.last_bbox = None;
-            }
-        }
-    }
-
-    pub fn filtered_and_sorted_items<'a>(
-        &self,
-        items: &'a [EquipmentItem],
-    ) -> Vec<(usize, &'a EquipmentItem)> {
-        let mut result: Vec<(usize, &EquipmentItem)> = items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| {
-                if let Some(slot) = self.selected_slot {
-                    if item.slot != slot {
-                        return false;
-                    }
-                }
-                if !self.search.is_empty() {
-                    if !item
-                        .name
-                        .to_lowercase()
-                        .contains(&self.search.to_lowercase())
-                    {
-                        return false;
-                    }
-                }
-                true
-            })
-            .collect();
-        match self.sort_order {
-            SortOrder::ByName => result.sort_by(|a, b| a.1.name.cmp(&b.1.name)),
-            SortOrder::BySetId => result.sort_by(|a, b| {
-                a.1.set_id
-                    .cmp(&b.1.set_id)
-                    .then_with(|| a.1.slot.slot_abbr().cmp(b.1.slot.slot_abbr()))
-            }),
-            SortOrder::BySlot => result.sort_by(|a, b| {
-                a.1.slot
-                    .slot_abbr()
-                    .cmp(b.1.slot.slot_abbr())
-                    .then_with(|| a.1.name.cmp(&b.1.name))
-            }),
-        }
-        result
-    }
-
-    pub fn item_matches_filter(&self, item: &EquipmentItem) -> bool {
-        if let Some(slot) = self.selected_slot {
-            if item.slot != slot {
-                return false;
-            }
-        }
-        if !self.search.is_empty() {
-            if !item
-                .name
-                .to_lowercase()
-                .contains(&self.search.to_lowercase())
-            {
-                return false;
-            }
-        }
-        true
-    }
-
-    pub fn build_flat_rows(&mut self, gs: &GameState) {
-        self.flat_rows_dirty = false;
-        self.cached_flat_rows.clear();
-
-        let mut sets_with_items: Vec<(usize, Vec<usize>)> = Vec::new();
-        for (set_idx, eq_set) in gs.equipment_sets.iter().enumerate() {
-            let filtered: Vec<usize> = eq_set
-                .item_indices
-                .iter()
-                .copied()
-                .filter(|&i| self.item_matches_filter(&gs.items[i]))
-                .collect();
-            if !filtered.is_empty() {
-                sets_with_items.push((set_idx, filtered));
-            }
-        }
-
-        match self.sort_order {
-            SortOrder::ByName | SortOrder::BySlot => {
-                sets_with_items.sort_by(|a, b| {
-                    gs.equipment_sets[a.0]
-                        .display_name
-                        .cmp(&gs.equipment_sets[b.0].display_name)
-                });
-            }
-            SortOrder::BySetId => {
-                sets_with_items.sort_by(|a, b| {
-                    gs.equipment_sets[a.0]
-                        .set_id
-                        .cmp(&gs.equipment_sets[b.0].set_id)
-                });
-            }
-        }
-
-        for (set_idx, filtered_indices) in sets_with_items {
-            let eq_set = &gs.equipment_sets[set_idx];
-            let expanded = self.expanded_sets.contains(&eq_set.set_id);
-            self.cached_flat_rows.push(FlatRow::GroupHeader {
-                set_id: eq_set.set_id,
-                display_name: eq_set.display_name.clone(),
-                item_count: filtered_indices.len(),
-                expanded,
-            });
-            if expanded {
-                for &global_idx in &filtered_indices {
-                    let item = &gs.items[global_idx];
-                    self.cached_flat_rows.push(FlatRow::Item {
-                        global_idx,
-                        label: format!("[{}] {}", item.slot.slot_abbr(), item.name),
-                    });
-                }
             }
         }
     }

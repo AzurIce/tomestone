@@ -18,6 +18,13 @@ FF14 本地工具软件，使用 Rust 实现。当前功能: 浏览游戏内服�
 | `docs/dye-system.md` | 染色系统技术细节 (colorset/stain/STM) | 实现染色预览功能时 |
 | `docs/tech-stack.md` | 技术选型依据和参考项目 | 选择依赖库、查找参考实现时 |
 
+## 参考资料
+
+- [xiv.dev](https://xiv.dev) - FF14 数据格式文档
+- [ffxiv-datamining](https://github.com/xivapi/ffxiv-datamining/blob/master/docs/README.md) - 数据挖掘文档
+- [ffxiv-datamining research](https://github.com/xivapi/ffxiv-datamining/blob/master/research/README.md) - 数据挖掘研究报告
+- [XIVAPI v2](https://v2.xivapi.com/docs/welcome/) - API 文档
+
 ## 开发约定
 
 - 使用中文进行对话和注释

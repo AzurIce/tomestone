@@ -1,3 +1,6 @@
 /target
 data_playground
 .tomestone
+
+**/tests/snapshots/**/*.diff.png
+**/tests/snapshots/**/*.new.png

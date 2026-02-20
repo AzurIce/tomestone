@@ -24,6 +24,10 @@ serde_json = "1"
 glam = "0.29"
 serde_yml = "0.0.12"
 ureq = "3"
+rfd = "0.15"
+
+[dev-dependencies]
+egui_kittest = { version = "0.33", features = ["wgpu", "snapshot"] }
 
 [profile.dev]
 overflow-checks = false

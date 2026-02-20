@@ -1,19 +1,21 @@
+mod editor;
+
+pub use editor::{AppContext, GlamourEditor, GlamourEditorAction};
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::game_data::EquipSlot;
+use crate::domain::EquipSlot;
 
-/// 幻化槽位数据
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlamourSlot {
     pub item_id: u32,
     pub stain_ids: [u32; 2],
 }
 
-/// 幻化组合
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlamourSet {
     pub id: String,
@@ -72,7 +74,7 @@ pub fn slot_key_for(slot: EquipSlot) -> &'static str {
 }
 
 fn glamour_dir() -> PathBuf {
-    crate::data_dir::glamours_dir()
+    crate::config::glamours_dir()
 }
 
 pub fn save_glamour_set(set: &GlamourSet) -> Result<(), String> {

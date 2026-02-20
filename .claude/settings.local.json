@@ -43,7 +43,22 @@
       "mcp__imhex-pattern-doc__searchDocumentation",
       "Bash(grep:*)",
       "Bash(xxd:*)",
-      "Bash(git config:*)"
+      "WebFetch(domain:wesl.rs)",
+      "Bash(done)",
+      "WebFetch(domain:wesl-lang.dev)",
+      "Bash(wc:*)",
+      "Bash(cargo update:*)",
+      "Bash(git mv:*)",
+      "Bash(cargo clean:*)",
+      "Bash(echo:*)",
+      "Bash(cargo locate-project:*)",
+      "mcp__gemini-cli__ask-gemini",
+      "WebFetch(domain:xiv.dev)",
+      "Bash(cmd //c \"dir G:\\\\最终幻想XIV\\\\game\\\\sqpack\\\\ /b\")",
+      "Bash(cmd //c:*)",
+      "Bash(powershell -Command \"Get-ChildItem ''G:\\\\最终幻想XIV\\\\game\\\\sqpack\\\\ffxiv'' | Select-Object -First 30 Name\")",
+      "Bash(powershell -Command:*)",
+      "mcp__fetch__fetch_json"
     ],
     "additionalDirectories": [
       "E:\\_ff14"

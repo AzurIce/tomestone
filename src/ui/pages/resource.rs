@@ -1,18 +1,18 @@
 use eframe::egui::{self, Margin, RichText};
 use egui_table::{CellInfo, HeaderCellInfo, HeaderRow, Table, TableDelegate};
 use physis::excel::Field;
-use physis::exh::{ColumnDataType, EXH, SheetRowKind};
+use physis::exh::{ColumnDataType, SheetRowKind, EXH};
 use physis::Language;
+use std::sync::mpsc::Receiver;
 
-use crate::game_data::{EquipSlot, GameData};
-
-// ── 文件预览 ──
+use crate::domain::EquipSlot;
+use crate::game::GameData;
+use crate::schema::SchemaTaskRunner;
+use crate::ui::components::show_progress_bar;
 
 enum FilePreview {
     Hex { data: Vec<u8>, path: String },
 }
-
-// ── 表格渲染 delegate ──
 
 struct ExdTableDelegate<'a> {
     flat_rows: &'a [(u32, Vec<Field>)],
@@ -45,10 +45,7 @@ impl TableDelegate for ExdTableDelegate<'_> {
                                 self.column_names[data_col], def.offset, type_short,
                             ));
                         } else {
-                            ui.strong(format!(
-                                "[{}] {} #{}",
-                                def.offset, type_short, data_col,
-                            ));
+                            ui.strong(format!("[{}] {} #{}", def.offset, type_short, data_col,));
                         }
                     }
                 }
@@ -100,41 +97,33 @@ impl TableDelegate for ExdTableDelegate<'_> {
     }
 }
 
-// ── 主状态 ──
-
 pub struct ResourceBrowserState {
-    // 表名 (初始化时加载, 已排序)
     all_table_names: Vec<String>,
-    // 搜索过滤后的索引缓存
     filtered_indices: Vec<usize>,
 
-    // 当前加载的表
     loaded_table_name: Option<String>,
     loaded_exh: Option<EXH>,
     flat_rows: Vec<(u32, Vec<Field>)>,
 
-    // UI 状态
     search: String,
     prev_search: String,
     selected_table_idx: Option<usize>,
     selected_row_idx: Option<usize>,
 
-    // 路径提取 + 预览
     extracted_paths: Vec<String>,
     path_input: String,
     preview: Option<FilePreview>,
     preview_error: Option<String>,
 
-    // Schema 列名
     schema_columns: Vec<String>,
-    schema_status: Option<String>,
+
+    schema_runner: SchemaTaskRunner,
+    schema_fetch_rx: Option<Receiver<Result<Vec<String>, String>>>,
+    schema_update_all_rx: Option<Receiver<usize>>,
 }
 
 impl ResourceBrowserState {
-    pub fn new(game: &GameData) -> Self {
-        let mut all_table_names = game.get_all_sheet_names();
-        all_table_names.sort();
-
+    pub fn new(all_table_names: Vec<String>) -> Self {
         let filtered_indices: Vec<usize> = (0..all_table_names.len()).collect();
 
         Self {
@@ -152,11 +141,36 @@ impl ResourceBrowserState {
             preview: None,
             preview_error: None,
             schema_columns: Vec::new(),
-            schema_status: None,
+            schema_runner: SchemaTaskRunner::new(),
+            schema_fetch_rx: None,
+            schema_update_all_rx: None,
+        }
+    }
+
+    pub fn poll_schema_downloads(&mut self) {
+        if let Some(rx) = &self.schema_fetch_rx {
+            if let Ok(result) = rx.try_recv() {
+                self.schema_fetch_rx = None;
+                if let Ok(columns) = result {
+                    self.schema_columns = columns;
+                }
+            }
+        }
+
+        if let Some(rx) = &self.schema_update_all_rx {
+            if let Ok(_count) = rx.try_recv() {
+                self.schema_update_all_rx = None;
+                if let Some(name) = &self.loaded_table_name {
+                    self.schema_columns =
+                        crate::schema::load_schema_from_cache(name).unwrap_or_default();
+                }
+            }
         }
     }
 
     pub fn show(&mut self, ctx: &egui::Context, game: &GameData) {
+        self.poll_schema_downloads();
+
         egui::SidePanel::left("exd_table_list")
             .default_width(220.0)
             .show(ctx, |ui| {
@@ -172,7 +186,6 @@ impl ResourceBrowserState {
         ui.heading("EXD 表");
         ui.separator();
 
-        // 文件路径读取
         ui.horizontal(|ui| {
             ui.label("路径:");
             let resp = ui.text_edit_singleline(&mut self.path_input);
@@ -233,53 +246,50 @@ impl ResourceBrowserState {
 
             if lines > 256 {
                 ui.label(
-                    RichText::new(format!("(仅显示前 4096 字节，共 {} 字节)", data.len()))
-                        .weak(),
+                    RichText::new(format!("(仅显示前 4096 字节，共 {} 字节)", data.len())).weak(),
                 );
             }
         }
 
         ui.separator();
 
-        // Schema 更新按钮
         ui.horizontal(|ui| {
-            if ui.button("更新 Schema").clicked() {
+            let is_downloading =
+                self.schema_fetch_rx.is_some() || self.schema_update_all_rx.is_some();
+
+            if ui
+                .add_enabled(!is_downloading, egui::Button::new("更新 Schema"))
+                .clicked()
+            {
                 if let Some(name) = &self.loaded_table_name {
-                    match crate::schema::update_schema(name) {
-                        Ok(cols) => {
-                            self.schema_status = Some(format!("已更新 {} ({} 列)", name, cols.len()));
-                            self.schema_columns = cols;
-                        }
-                        Err(e) => {
-                            self.schema_status = Some(format!("更新失败: {}", e));
-                        }
-                    }
-                } else {
-                    self.schema_status = Some("请先选择一张表".to_string());
+                    let rx = self.schema_runner.spawn_fetch(name.clone());
+                    self.schema_fetch_rx = Some(rx);
                 }
             }
-            if ui.button("更新全部").clicked() {
-                let count = crate::schema::update_all_schemas();
-                self.schema_status = Some(format!("已更新 {} 个 Schema", count));
-                // 重新加载当前表的 schema
-                if let Some(name) = &self.loaded_table_name {
-                    self.schema_columns = crate::schema::load_schema(name).unwrap_or_default();
+            if ui
+                .add_enabled(!is_downloading, egui::Button::new("更新全部"))
+                .clicked()
+            {
+                let names = crate::schema::cached_schema_names();
+                if !names.is_empty() {
+                    let rx = self.schema_runner.spawn_fetch_all(names);
+                    self.schema_update_all_rx = Some(rx);
                 }
             }
         });
-        if let Some(status) = &self.schema_status {
-            ui.label(RichText::new(status).weak());
+
+        let tracker = self.schema_runner.tracker();
+        if tracker.is_active() {
+            show_progress_bar(ui, &tracker);
         }
 
         ui.separator();
 
-        // 表名搜索
         ui.horizontal(|ui| {
             ui.label("搜索:");
             ui.text_edit_singleline(&mut self.search);
         });
 
-        // 搜索变化时重建过滤索引
         if self.search != self.prev_search {
             self.prev_search = self.search.clone();
             let search_lower = self.search.to_lowercase();
@@ -335,7 +345,6 @@ impl ResourceBrowserState {
         self.loaded_exh = None;
         self.flat_rows.clear();
         self.schema_columns.clear();
-        self.schema_status = None;
     }
 
     fn show_central_panel(&mut self, ui: &mut egui::Ui, game: &GameData) {
@@ -360,7 +369,6 @@ impl ResourceBrowserState {
             return;
         };
 
-        // 表元数据
         ui.heading(&table_name);
         ui.horizontal(|ui| {
             ui.label(format!(
@@ -376,7 +384,6 @@ impl ResourceBrowserState {
         });
         ui.separator();
 
-        // 数据网格
         let col_count = exh.column_definitions.len().min(50);
         let row_count = self.flat_rows.len();
 
@@ -385,8 +392,9 @@ impl ResourceBrowserState {
         } else {
             ui.style_mut().override_font_id = Some(egui::FontId::monospace(12.0));
 
-            // 构建列定义: ID 列 + 数据列
-            let id_col = egui_table::Column::new(60.0).range(40.0..=120.0).resizable(true);
+            let id_col = egui_table::Column::new(60.0)
+                .range(40.0..=120.0)
+                .resizable(true);
             let mut columns = vec![id_col];
 
             for i in 0..col_count {
@@ -425,13 +433,12 @@ impl ResourceBrowserState {
                 .id_salt("exd_data_table")
                 .num_rows(row_count as u64)
                 .columns(columns)
-                .num_sticky_cols(1) // ID 列固定
+                .num_sticky_cols(1)
                 .headers([HeaderRow::new(20.0)])
                 .show(ui, &mut delegate);
 
             ui.style_mut().override_font_id = None;
 
-            // 处理行选择
             if let Some(row_idx) = delegate.clicked_row {
                 self.selected_row_idx = Some(row_idx);
                 let (row_id, columns) = &self.flat_rows[row_idx];
@@ -439,7 +446,6 @@ impl ResourceBrowserState {
             }
         }
 
-        // 提取的路径
         if !self.extracted_paths.is_empty() {
             ui.separator();
             ui.label(RichText::new("提取的文件路径:").strong());
@@ -464,13 +470,22 @@ impl ResourceBrowserState {
         self.flat_rows.clear();
         self.selected_row_idx = None;
         self.extracted_paths.clear();
-        self.schema_columns = crate::schema::load_schema(name).unwrap_or_default();
+
+        match crate::schema::load_schema_from_cache(name) {
+            Some(columns) => {
+                self.schema_columns = columns;
+            }
+            None => {
+                self.schema_columns.clear();
+                let rx = self.schema_runner.spawn_fetch(name.to_string());
+                self.schema_fetch_rx = Some(rx);
+            }
+        }
 
         let Some(exh) = game.read_excel_header(name) else {
             return;
         };
 
-        // 选择语言: 优先中文简体, 否则用表声明的第一个语言
         let lang = if exh.languages.contains(&Language::ChineseSimplified) {
             Language::ChineseSimplified
         } else if let Some(&first) = exh.languages.first() {
@@ -513,8 +528,6 @@ impl ResourceBrowserState {
         }
     }
 }
-
-// ── 辅助函数 ──
 
 fn column_type_short(dt: ColumnDataType) -> &'static str {
     match dt {
@@ -562,7 +575,6 @@ fn format_field(field: &Field) -> String {
     }
 }
 
-/// 从已知表中提取文件路径
 fn extract_paths(table_name: &str, _row_id: u32, row: &[Field]) -> Vec<String> {
     match table_name {
         "Item" => extract_item_paths(row),

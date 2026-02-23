@@ -1,4 +1,5 @@
 use eframe::egui;
+use std::time::Instant;
 
 use crate::app::App;
 use crate::domain::{HousingExteriorItem, EXTERIOR_PART_TYPES};
@@ -10,6 +11,9 @@ use crate::loading::GameState;
 
 impl App {
     pub fn show_housing_page(&mut self, ctx: &egui::Context, gs: &mut GameState) {
+        let t_frame = Instant::now();
+
+        let t0 = Instant::now();
         egui::SidePanel::left("housing_list")
             .default_width(350.0)
             .show(ctx, |ui| {
@@ -48,6 +52,7 @@ impl App {
                 ui.separator();
 
                 // 物品列表
+                let t_filter = Instant::now();
                 let search_lower = self.housing_search.to_lowercase();
                 let filtered: Vec<(usize, &HousingExteriorItem)> = gs
                     .housing_exteriors
@@ -67,22 +72,29 @@ impl App {
                         true
                     })
                     .collect();
+                let filter_ms = t_filter.elapsed().as_secs_f64() * 1000.0;
 
                 ui.label(format!("{} 件物品", filtered.len()));
                 ui.separator();
 
                 let row_height = 28.0;
                 let total_rows = filtered.len();
+                let t_scroll = Instant::now();
+                let mut icon_load_count = 0u32;
+                let mut icon_load_ms = 0.0f64;
                 egui::ScrollArea::vertical().show_rows(
                     ui,
                     row_height,
                     total_rows,
                     |ui, row_range| {
+                        let range_desc = format!("{}..{}", row_range.start, row_range.end);
+                        eprintln!("  [timing] show_rows range: {}", range_desc);
                         for i in row_range {
                             let (idx, item) = &filtered[i];
                             let is_selected = self.housing_selected_item == Some(*idx);
                             let response = ui.horizontal(|ui| {
                                 // 图标
+                                let t_icon = Instant::now();
                                 if let Some(icon) =
                                     self.get_or_load_icon(ctx, &gs.game, item.icon_id)
                                 {
@@ -93,6 +105,9 @@ impl App {
                                 } else {
                                     ui.allocate_space(egui::vec2(24.0, 24.0));
                                 }
+                                let elapsed = t_icon.elapsed().as_secs_f64() * 1000.0;
+                                icon_load_ms += elapsed;
+                                icon_load_count += 1;
 
                                 let label =
                                     format!("[{}] {}", item.part_type.display_name(), item.name);
@@ -105,9 +120,27 @@ impl App {
                         }
                     },
                 );
+                let scroll_ms = t_scroll.elapsed().as_secs_f64() * 1000.0;
+                if filter_ms + scroll_ms > 16.0 {
+                    eprintln!(
+                        "  [timing] 侧栏内部: filter {:.1}ms, scroll {:.1}ms (icons: {} 个 {:.1}ms)",
+                        filter_ms, scroll_ms, icon_load_count, icon_load_ms
+                    );
+                }
             });
+        let side_panel_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
+        let t1 = Instant::now();
         self.show_housing_detail_panel(ctx, gs);
+        let detail_panel_ms = t1.elapsed().as_secs_f64() * 1000.0;
+
+        let total_ms = t_frame.elapsed().as_secs_f64() * 1000.0;
+        if total_ms > 16.0 {
+            eprintln!(
+                "[housing] 帧耗时 {:.1}ms (侧栏 {:.1}ms, 详情 {:.1}ms)",
+                total_ms, side_panel_ms, detail_panel_ms
+            );
+        }
     }
 
     fn show_housing_detail_panel(&mut self, ctx: &egui::Context, gs: &mut GameState) {
@@ -135,9 +168,19 @@ impl App {
 
                     // 加载模型
                     if self.housing_loaded_model_idx != Some(idx) {
+                        let t_load = Instant::now();
                         self.load_housing_model(idx, item, gs);
+                        eprintln!(
+                            "[housing] 模型加载耗时 {:.1}ms",
+                            t_load.elapsed().as_secs_f64() * 1000.0
+                        );
                     }
+                    let t_vp = Instant::now();
                     self.housing_viewport.show(ui, ctx, "模型加载失败");
+                    let vp_ms = t_vp.elapsed().as_secs_f64() * 1000.0;
+                    if vp_ms > 8.0 {
+                        eprintln!("[housing] viewport.show 耗时 {:.1}ms", vp_ms);
+                    }
                 } else {
                     ui.label("选择一件外装查看详情");
                 }
@@ -150,32 +193,30 @@ impl App {
     }
 
     fn load_housing_model(&mut self, idx: usize, item: &HousingExteriorItem, gs: &GameState) {
+        let t_total = Instant::now();
         self.housing_loaded_model_idx = Some(idx);
 
         let model_key = item.model_key;
         let id = format!("{:04}", model_key);
 
-        // 房屋外装模型路径:
-        // SGB: bgcommon/hou/outdoor/general/{id}/asset/gar_b0_m{id}.sgb
-        // 也可能直接有 MDL 文件
         let sgb_path = format!(
             "bgcommon/hou/outdoor/general/{}/asset/gar_b0_m{}.sgb",
             id, id
         );
 
-        println!("尝试加载房屋外装 SGB: {}", sgb_path);
-
-        // 尝试从 SGB 提取 MDL 路径
+        // 1. 读取 SGB
+        let t_sgb = Instant::now();
         let mdl_paths = if let Ok(sgb_data) = gs.game.read_file(&sgb_path) {
             let paths = extract_mdl_paths_from_sgb(&sgb_data);
-            println!("SGB 中找到 {} 个 MDL 路径: {:?}", paths.len(), paths);
             paths
         } else {
-            println!("SGB 加载失败，尝试直接查找 MDL");
             Vec::new()
         };
+        eprintln!(
+            "  [timing] SGB 读取+解析: {:.1}ms",
+            t_sgb.elapsed().as_secs_f64() * 1000.0
+        );
 
-        // 如果 SGB 没有找到 MDL，尝试常见的直接 MDL 路径
         let mdl_candidates: Vec<String> = if mdl_paths.is_empty() {
             vec![
                 format!(
@@ -195,25 +236,26 @@ impl App {
             mdl_paths
         };
 
-        // 尝试加载所有 MDL 并合并
+        // 2. 加载所有 MDL
+        let t_mdl = Instant::now();
         let mut all_meshes: Vec<MeshData> = Vec::new();
         let mut all_material_names: Vec<String> = Vec::new();
         let mut first_mdl_path: Option<String> = None;
 
         for mdl_path in &mdl_candidates {
-            println!("  尝试 MDL: {}", mdl_path);
+            let t_one = Instant::now();
             match load_mdl(&gs.game, mdl_path) {
                 Ok(result) if !result.meshes.is_empty() => {
-                    println!(
-                        "  MDL 加载成功: {} 个网格, {} 个材质",
+                    eprintln!(
+                        "  [timing] MDL {}: {:.1}ms ({} meshes, {} mats)",
+                        mdl_path,
+                        t_one.elapsed().as_secs_f64() * 1000.0,
                         result.meshes.len(),
                         result.material_names.len()
                     );
                     if first_mdl_path.is_none() {
                         first_mdl_path = Some(mdl_path.clone());
                     }
-
-                    // 调整材质索引偏移
                     let mat_offset = all_material_names.len() as u16;
                     for mut mesh in result.meshes {
                         mesh.material_index += mat_offset;
@@ -222,13 +264,25 @@ impl App {
                     all_material_names.extend(result.material_names);
                 }
                 Ok(_) => {
-                    println!("  MDL 网格为空: {}", mdl_path);
+                    eprintln!(
+                        "  [timing] MDL {} (空): {:.1}ms",
+                        mdl_path,
+                        t_one.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
-                Err(e) => {
-                    println!("  MDL 加载失败: {} - {}", mdl_path, e);
+                Err(_e) => {
+                    eprintln!(
+                        "  [timing] MDL {} (失败): {:.1}ms",
+                        mdl_path,
+                        t_one.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
             }
         }
+        eprintln!(
+            "  [timing] MDL 总计: {:.1}ms",
+            t_mdl.elapsed().as_secs_f64() * 1000.0
+        );
 
         if all_meshes.is_empty() {
             eprintln!("房屋外装模型加载失败: model_key={}", model_key);
@@ -246,15 +300,19 @@ impl App {
         let bbox = compute_bounding_box(&all_meshes);
         let mdl_path_ref = first_mdl_path.as_deref().unwrap_or("");
 
-        println!(
-            "加载房屋外装纹理: {} 个材质, {} 个网格",
+        // 3. 加载纹理
+        let t_tex = Instant::now();
+        let load_result =
+            load_housing_mesh_textures(&gs.game, &all_material_names, &all_meshes, mdl_path_ref);
+        eprintln!(
+            "  [timing] 纹理加载: {:.1}ms ({} 材质, {} 网格)",
+            t_tex.elapsed().as_secs_f64() * 1000.0,
             all_material_names.len(),
             all_meshes.len()
         );
 
-        let load_result =
-            load_housing_mesh_textures(&gs.game, &all_material_names, &all_meshes, mdl_path_ref);
-
+        // 4. 上传 GPU
+        let t_gpu = Instant::now();
         let geometry: Vec<(&[tomestone_render::Vertex], &[u16])> = all_meshes
             .iter()
             .map(|m| (m.vertices.as_slice(), m.indices.as_slice()))
@@ -269,8 +327,18 @@ impl App {
             &geometry,
             &load_result.mesh_textures,
         );
+        eprintln!(
+            "  [timing] GPU 上传: {:.1}ms",
+            t_gpu.elapsed().as_secs_f64() * 1000.0
+        );
+
         self.housing_viewport.camera.focus_on(&bbox);
         self.housing_viewport.last_bbox = Some(bbox);
         self.housing_viewport.free_texture();
+
+        eprintln!(
+            "  [timing] load_housing_model 总计: {:.1}ms",
+            t_total.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }

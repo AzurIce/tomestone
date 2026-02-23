@@ -355,7 +355,12 @@ pub fn load_housing_mesh_textures(
     let material_dir = format!("{}/material", base_dir);
 
     load_mesh_textures_with_resolver(game, material_names, meshes, |short_name| {
-        vec![format!("{}{}", material_dir, short_name)]
+        if short_name.contains('/') {
+            // 已经是完整路径
+            vec![short_name.to_string()]
+        } else {
+            vec![format!("{}{}", material_dir, short_name)]
+        }
     })
 }
 

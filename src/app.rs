@@ -52,7 +52,7 @@ pub struct App {
     pub test_progress: ProgressTracker,
     pub test_total: u64,
     pub test_current: u64,
-    pub icon_cache: HashMap<u32, egui::TextureHandle>,
+    pub icon_cache: HashMap<u32, Option<egui::TextureHandle>>,
     // 房屋外装浏览器状态
     pub housing_viewport: ViewportState,
     pub housing_selected_part_type: Option<ExteriorPartType>,
@@ -129,31 +129,32 @@ impl App {
             return None;
         }
 
-        if let Some(handle) = self.icon_cache.get(&icon_id) {
-            return Some(handle.clone());
+        if let Some(cached) = self.icon_cache.get(&icon_id) {
+            return cached.clone();
         }
 
-        let tex_data = gs.load_icon(icon_id)?;
-        let size = [tex_data.width as _, tex_data.height as _];
-        let pixels: Vec<egui::Color32> = tex_data
-            .rgba
-            .chunks_exact(4)
-            .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
-            .collect();
+        let result = gs.load_icon(icon_id).map(|tex_data| {
+            let size = [tex_data.width as _, tex_data.height as _];
+            let pixels: Vec<egui::Color32> = tex_data
+                .rgba
+                .chunks_exact(4)
+                .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+                .collect();
 
-        let color_image = egui::ColorImage {
-            size,
-            pixels,
-            source_size: egui::Vec2::new(40.0, 40.0),
-        };
-        let handle = ctx.load_texture(
-            format!("icon_{}", icon_id),
-            color_image,
-            egui::TextureOptions::default(),
-        );
+            let color_image = egui::ColorImage {
+                size,
+                pixels,
+                source_size: egui::Vec2::new(40.0, 40.0),
+            };
+            ctx.load_texture(
+                format!("icon_{}", icon_id),
+                color_image,
+                egui::TextureOptions::default(),
+            )
+        });
 
-        self.icon_cache.insert(icon_id, handle.clone());
-        Some(handle)
+        self.icon_cache.insert(icon_id, result.clone());
+        result
     }
 
     pub fn start_loading(&mut self, install_dir: PathBuf) {

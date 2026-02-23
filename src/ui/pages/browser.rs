@@ -101,6 +101,9 @@ impl App {
                     self.selected_slot,
                     &highlight,
                     "browser",
+                    &mut self.icon_cache,
+                    ctx,
+                    &gs.game,
                 ) {
                     self.selected_item = Some(clicked.global_idx);
                 }

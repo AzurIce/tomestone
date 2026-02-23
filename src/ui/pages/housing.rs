@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::app::App;
-use crate::domain::{HousingExteriorItem, EXTERIOR_PART_TYPES};
+use crate::domain::{HousingExteriorItem, ViewMode, EXTERIOR_PART_TYPES};
 use crate::game::{
     compute_bounding_box, extract_mdl_paths_from_sgb, load_housing_mesh_textures, load_mdl,
     MeshData,
@@ -39,10 +39,31 @@ impl App {
 
                 ui.separator();
 
-                // 搜索框
+                // 搜索框 + 视图模式
                 ui.horizontal(|ui| {
                     ui.label("搜索:");
                     ui.text_edit_singleline(&mut self.housing_search);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("视图:");
+                    if ui
+                        .selectable_label(
+                            self.housing_view_mode == ViewMode::List,
+                            ViewMode::List.label(),
+                        )
+                        .clicked()
+                    {
+                        self.housing_view_mode = ViewMode::List;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.housing_view_mode == ViewMode::Table,
+                            ViewMode::Table.label(),
+                        )
+                        .clicked()
+                    {
+                        self.housing_view_mode = ViewMode::Table;
+                    }
                 });
 
                 ui.separator();
@@ -71,39 +92,69 @@ impl App {
                 ui.label(format!("{} 件物品", filtered.len()));
                 ui.separator();
 
-                let row_height = 28.0;
-                let total_rows = filtered.len();
-                egui::ScrollArea::vertical().show_rows(
-                    ui,
-                    row_height,
-                    total_rows,
-                    |ui, row_range| {
-                        for i in row_range {
-                            let (idx, item) = &filtered[i];
-                            let is_selected = self.housing_selected_item == Some(*idx);
-                            let response = ui.horizontal(|ui| {
-                                if let Some(icon) =
-                                    self.get_or_load_icon(ctx, &gs.game, item.icon_id)
-                                {
-                                    ui.image(egui::load::SizedTexture::new(
-                                        icon.id(),
-                                        egui::vec2(24.0, 24.0),
-                                    ));
-                                } else {
-                                    ui.allocate_space(egui::vec2(24.0, 24.0));
+                match self.housing_view_mode {
+                    ViewMode::Table => {
+                        let row_height = 28.0;
+                        let total_rows = filtered.len();
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            row_height,
+                            total_rows,
+                            |ui, row_range| {
+                                for i in row_range {
+                                    let (idx, item) = &filtered[i];
+                                    let is_selected = self.housing_selected_item == Some(*idx);
+                                    let response = ui.horizontal(|ui| {
+                                        if let Some(icon) =
+                                            self.get_or_load_icon(ctx, &gs.game, item.icon_id)
+                                        {
+                                            ui.image(egui::load::SizedTexture::new(
+                                                icon.id(),
+                                                egui::vec2(24.0, 24.0),
+                                            ));
+                                        } else {
+                                            ui.allocate_space(egui::vec2(24.0, 24.0));
+                                        }
+
+                                        let label = format!(
+                                            "[{}] {}",
+                                            item.part_type.display_name(),
+                                            item.name
+                                        );
+                                        ui.selectable_label(is_selected, label)
+                                    });
+
+                                    if response.inner.clicked() {
+                                        self.housing_selected_item = Some(*idx);
+                                    }
                                 }
-
-                                let label =
-                                    format!("[{}] {}", item.part_type.display_name(), item.name);
-                                ui.selectable_label(is_selected, label)
-                            });
-
-                            if response.inner.clicked() {
-                                self.housing_selected_item = Some(*idx);
-                            }
-                        }
-                    },
-                );
+                            },
+                        );
+                    }
+                    ViewMode::List => {
+                        let row_height = 18.0;
+                        let total_rows = filtered.len();
+                        egui::ScrollArea::vertical().show_rows(
+                            ui,
+                            row_height,
+                            total_rows,
+                            |ui, row_range| {
+                                for i in row_range {
+                                    let (idx, item) = &filtered[i];
+                                    let is_selected = self.housing_selected_item == Some(*idx);
+                                    let label = format!(
+                                        "[{}] {}",
+                                        item.part_type.display_name(),
+                                        item.name
+                                    );
+                                    if ui.selectable_label(is_selected, label).clicked() {
+                                        self.housing_selected_item = Some(*idx);
+                                    }
+                                }
+                            },
+                        );
+                    }
+                }
             });
 
         self.show_housing_detail_panel(ctx, gs);

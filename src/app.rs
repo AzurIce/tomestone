@@ -7,6 +7,7 @@ use eframe::egui;
 use crate::config;
 use crate::domain::EquipSlot;
 use crate::domain::ExteriorPartType;
+use crate::domain::ViewMode;
 use crate::game::{CachedMaterial, GameData, MeshData};
 use crate::glamour;
 use crate::loading::*;
@@ -59,6 +60,7 @@ pub struct App {
     pub housing_selected_item: Option<usize>,
     pub housing_loaded_model_idx: Option<usize>,
     pub housing_search: String,
+    pub housing_view_mode: ViewMode,
 }
 
 impl App {
@@ -116,6 +118,7 @@ impl App {
             housing_selected_item: None,
             housing_loaded_model_idx: None,
             housing_search: String::new(),
+            housing_view_mode: ViewMode::Table,
         }
     }
 

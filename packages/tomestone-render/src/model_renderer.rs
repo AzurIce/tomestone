@@ -305,7 +305,7 @@ impl ModelRenderer {
     ) {
         self.meshes.clear();
         let white = TextureData {
-            rgba: vec![255, 255, 255, 255],
+            rgba: std::sync::Arc::new(vec![255, 255, 255, 255]),
             width: 1,
             height: 1,
         };

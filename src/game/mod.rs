@@ -63,7 +63,7 @@ impl GameData {
     pub fn parsed_tex(&self, path: &str) -> Option<TextureData> {
         let tex: physis::tex::Texture = self.physis.borrow_mut().parsed(path).ok()?;
         Some(TextureData {
-            rgba: tex.rgba,
+            rgba: tex.rgba.into(),
             width: tex.width,
             height: tex.height,
         })

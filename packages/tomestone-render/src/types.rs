@@ -44,13 +44,15 @@ impl BoundingBox {
 }
 
 /// 通用纹理数据容器（CPU 端 RGBA）
+#[derive(Clone)]
 pub struct TextureData {
-    pub rgba: Vec<u8>,
+    pub rgba: std::sync::Arc<Vec<u8>>,
     pub width: u32,
     pub height: u32,
 }
 
 /// 单个 mesh 的全部纹理数据
+#[derive(Clone)]
 pub struct MeshTextures {
     pub diffuse: TextureData,
     pub normal: Option<TextureData>,

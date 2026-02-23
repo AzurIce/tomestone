@@ -95,7 +95,7 @@ pub fn bake_color_table_texture(
     }
 
     TextureData {
-        rgba,
+        rgba: rgba.into(),
         width: id_tex.width,
         height: id_tex.height,
     }
@@ -251,7 +251,7 @@ fn bake_emissive_texture(id_tex: &TextureData, color_table: &ColorTable) -> Text
         .any(|c| c[0] > 0.001 || c[1] > 0.001 || c[2] > 0.001);
     if !has_emissive {
         return TextureData {
-            rgba: vec![0, 0, 0, 255],
+            rgba: vec![0, 0, 0, 255].into(),
             width: 1,
             height: 1,
         };
@@ -283,7 +283,7 @@ fn bake_emissive_texture(id_tex: &TextureData, color_table: &ColorTable) -> Text
     }
 
     TextureData {
-        rgba,
+        rgba: rgba.into(),
         width: id_tex.width,
         height: id_tex.height,
     }
@@ -291,7 +291,7 @@ fn bake_emissive_texture(id_tex: &TextureData, color_table: &ColorTable) -> Text
 
 fn fallback_white() -> TextureData {
     TextureData {
-        rgba: vec![255, 255, 255, 255],
+        rgba: vec![255, 255, 255, 255].into(),
         width: 1,
         height: 1,
     }
@@ -422,28 +422,7 @@ fn load_mesh_textures_with_resolver(
             }
         }
         let cached = tex_cache.get(&mat_idx).unwrap();
-        mesh_textures.push(MeshTextures {
-            diffuse: TextureData {
-                rgba: cached.diffuse.rgba.clone(),
-                width: cached.diffuse.width,
-                height: cached.diffuse.height,
-            },
-            normal: cached.normal.as_ref().map(|t| TextureData {
-                rgba: t.rgba.clone(),
-                width: t.width,
-                height: t.height,
-            }),
-            mask: cached.mask.as_ref().map(|t| TextureData {
-                rgba: t.rgba.clone(),
-                width: t.width,
-                height: t.height,
-            }),
-            emissive: cached.emissive.as_ref().map(|t| TextureData {
-                rgba: t.rgba.clone(),
-                width: t.width,
-                height: t.height,
-            }),
-        });
+        mesh_textures.push(cached.clone());
     }
     MaterialLoadResult {
         mesh_textures,

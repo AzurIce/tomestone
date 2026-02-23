@@ -261,6 +261,8 @@ impl App {
             .collect();
 
         let vp = &mut self.housing_viewport;
+        vp.model_renderer
+            .set_model_type(tomestone_render::ModelType::Background);
         vp.model_renderer.set_mesh_data(
             &vp.render_state.device,
             &vp.render_state.queue,

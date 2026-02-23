@@ -6,6 +6,8 @@ struct Uniforms {
     light_dir: vec3<f32>,
     ambient_sky: vec3<f32>,
     ambient_ground: vec3<f32>,
+    // bit0: 1=Equipment(顶点颜色遮罩+法线alpha裁剪), 0=Background
+    model_flags: u32,
 };
 
 struct VsIn {
@@ -53,14 +55,16 @@ struct VsOut {
 // ── Fragment ──
 
 @fragment fn fs_main(f: VsOut) -> @location(0) vec4<f32> {
+    let is_equipment = (u.model_flags & 1u) != 0u;
+
     // 采样纹理
     let diffuse_sample = textureSample(t_diffuse, s_shared, f.uv);
     let normal_sample = textureSample(t_normal, s_shared, f.uv);
     let mask_sample = textureSample(t_mask, s_shared, f.uv);
     let emissive_sample = textureSample(t_emissive, s_shared, f.uv);
 
-    // Alpha 裁剪 (法线贴图 alpha 通道)
-    if normal_sample.a < 0.5 {
+    // Alpha 裁剪: 仅装备模型使用法线贴图 alpha 通道裁剪
+    if is_equipment && normal_sample.a < 0.5 {
         discard;
     }
 
@@ -83,9 +87,20 @@ struct VsOut {
     let mask_ao = mask_sample.b;
 
     // ---- 顶点颜色材质属性 ----
-    let vc_spec_mask = f.color.r;   // 高光遮罩
-    let vc_roughness = f.color.g;   // 粗糙度调制
-    let vc_diffuse_mask = f.color.b; // 漫反射遮罩
+    // 装备模型: 顶点颜色用于遮罩 (R=高光, G=粗糙度, B=漫反射)
+    // BG 模型: 顶点颜色直接作为颜色调制
+    var vc_spec_mask: f32;
+    var vc_roughness: f32;
+    var vc_diffuse_mask: f32;
+    if is_equipment {
+        vc_spec_mask = f.color.r;
+        vc_roughness = f.color.g;
+        vc_diffuse_mask = f.color.b;
+    } else {
+        vc_spec_mask = 1.0;
+        vc_roughness = 1.0;
+        vc_diffuse_mask = 1.0;
+    }
 
     // ---- 光照计算 ----
     let light_dir = normalize(u.light_dir);

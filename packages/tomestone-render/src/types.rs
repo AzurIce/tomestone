@@ -1,3 +1,13 @@
+/// 模型类型，影响 shader 中的光照和材质处理方式
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelType {
+    /// 角色装备: 使用顶点颜色遮罩、法线 alpha 裁剪
+    #[default]
+    Equipment,
+    /// 背景/房屋模型: 不使用顶点颜色遮罩，不做法线 alpha 裁剪
+    Background,
+}
+
 /// GPU 顶点格式
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

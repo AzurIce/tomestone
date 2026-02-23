@@ -1,8 +1,8 @@
 use crate::camera::Camera;
 use crate::math::{normalize, sub};
-use crate::types::{MeshTextures, TextureData, Vertex};
+use crate::types::{MeshTextures, ModelType, TextureData, Vertex};
 
-/// Uniform buffer 数据 (128 bytes, 16-byte aligned fields)
+/// Uniform buffer 数据 (16-byte aligned fields)
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -14,7 +14,8 @@ struct Uniforms {
     ambient_sky: [f32; 3],
     _pad2: f32,
     ambient_ground: [f32; 3],
-    _pad3: f32,
+    /// bit0: 1=Equipment(使用顶点颜色遮罩+法线alpha裁剪), 0=Background
+    model_flags: u32,
 }
 
 struct GpuMesh {
@@ -48,6 +49,7 @@ pub struct ModelRenderer {
     depth_texture: Option<(wgpu::Texture, wgpu::TextureView)>,
     target_size: [u32; 2],
     meshes: Vec<GpuMesh>,
+    model_type: ModelType,
 }
 
 impl ModelRenderer {
@@ -64,20 +66,19 @@ impl ModelRenderer {
             mapped_at_creation: false,
         });
 
-        let uniform_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("uniform_bgl"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
+        let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("uniform_bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
 
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -142,11 +143,31 @@ impl ModelRenderer {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &[
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0,  shader_location: 0 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 12, shader_location: 1 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 24, shader_location: 2 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 32, shader_location: 3 },
-                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 48, shader_location: 4 },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x3,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x3,
+                            offset: 12,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 24,
+                            shader_location: 2,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 32,
+                            shader_location: 3,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 48,
+                            shader_location: 4,
+                        },
                     ],
                 }],
                 compilation_options: Default::default(),
@@ -188,6 +209,7 @@ impl ModelRenderer {
             depth_texture: None,
             target_size: [0, 0],
             meshes: Vec::new(),
+            model_type: ModelType::Equipment,
         }
     }
 
@@ -201,7 +223,11 @@ impl ModelRenderer {
         height: u32,
         format: wgpu::TextureFormat,
     ) -> (wgpu::Texture, wgpu::TextureView) {
-        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: None,
             size,
@@ -243,11 +269,26 @@ impl ModelRenderer {
             label: Some("texture_bg"),
             layout: &self.texture_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(diffuse_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.gpu_sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(normal_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(mask_view) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(emissive_view) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(diffuse_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.gpu_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(mask_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(emissive_view),
+                },
             ],
         })
     }
@@ -263,7 +304,11 @@ impl ModelRenderer {
         mesh_textures: &[MeshTextures],
     ) {
         self.meshes.clear();
-        let white = TextureData { rgba: vec![255, 255, 255, 255], width: 1, height: 1 };
+        let white = TextureData {
+            rgba: vec![255, 255, 255, 255],
+            width: 1,
+            height: 1,
+        };
 
         for (i, (vertices, indices)) in mesh_geometry.iter().enumerate() {
             if vertices.is_empty() || indices.is_empty() {
@@ -285,26 +330,78 @@ impl ModelRenderer {
             let diffuse_data = mt.map(|m| &m.diffuse).unwrap_or(&white);
 
             let (_, diffuse_view) = Self::upload_gpu_texture(
-                device, queue, &diffuse_data.rgba, diffuse_data.width, diffuse_data.height,
+                device,
+                queue,
+                &diffuse_data.rgba,
+                diffuse_data.width,
+                diffuse_data.height,
                 wgpu::TextureFormat::Rgba8UnormSrgb,
             );
 
             let (normal_tex, normal_view) = match mt.and_then(|m| m.normal.as_ref()) {
-                Some(nd) => Self::upload_gpu_texture(device, queue, &nd.rgba, nd.width, nd.height, wgpu::TextureFormat::Rgba8Unorm),
-                None => Self::upload_gpu_texture(device, queue, &DEFAULT_NORMAL, 1, 1, wgpu::TextureFormat::Rgba8Unorm),
+                Some(nd) => Self::upload_gpu_texture(
+                    device,
+                    queue,
+                    &nd.rgba,
+                    nd.width,
+                    nd.height,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                ),
+                None => Self::upload_gpu_texture(
+                    device,
+                    queue,
+                    &DEFAULT_NORMAL,
+                    1,
+                    1,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                ),
             };
 
             let (mask_tex, mask_view) = match mt.and_then(|m| m.mask.as_ref()) {
-                Some(md) => Self::upload_gpu_texture(device, queue, &md.rgba, md.width, md.height, wgpu::TextureFormat::Rgba8Unorm),
-                None => Self::upload_gpu_texture(device, queue, &DEFAULT_MASK, 1, 1, wgpu::TextureFormat::Rgba8Unorm),
+                Some(md) => Self::upload_gpu_texture(
+                    device,
+                    queue,
+                    &md.rgba,
+                    md.width,
+                    md.height,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                ),
+                None => Self::upload_gpu_texture(
+                    device,
+                    queue,
+                    &DEFAULT_MASK,
+                    1,
+                    1,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                ),
             };
 
             let (emissive_tex, emissive_view) = match mt.and_then(|m| m.emissive.as_ref()) {
-                Some(ed) => Self::upload_gpu_texture(device, queue, &ed.rgba, ed.width, ed.height, wgpu::TextureFormat::Rgba8UnormSrgb),
-                None => Self::upload_gpu_texture(device, queue, &DEFAULT_EMISSIVE, 1, 1, wgpu::TextureFormat::Rgba8UnormSrgb),
+                Some(ed) => Self::upload_gpu_texture(
+                    device,
+                    queue,
+                    &ed.rgba,
+                    ed.width,
+                    ed.height,
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                ),
+                None => Self::upload_gpu_texture(
+                    device,
+                    queue,
+                    &DEFAULT_EMISSIVE,
+                    1,
+                    1,
+                    wgpu::TextureFormat::Rgba8UnormSrgb,
+                ),
             };
 
-            let texture_bind_group = self.create_texture_bind_group(device, &diffuse_view, &normal_view, &mask_view, &emissive_view);
+            let texture_bind_group = self.create_texture_bind_group(
+                device,
+                &diffuse_view,
+                &normal_view,
+                &mask_view,
+                &emissive_view,
+            );
 
             self.meshes.push(GpuMesh {
                 vertex_buffer,
@@ -332,20 +429,42 @@ impl ModelRenderer {
         for (i, gpu_mesh) in self.meshes.iter_mut().enumerate() {
             if let Some(Some(tex)) = textures.get(i) {
                 let (_, diffuse_view) = Self::upload_gpu_texture(
-                    device, queue, &tex.rgba, tex.width, tex.height,
+                    device,
+                    queue,
+                    &tex.rgba,
+                    tex.width,
+                    tex.height,
                     wgpu::TextureFormat::Rgba8UnormSrgb,
                 );
-                gpu_mesh.texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("texture_bg"),
-                    layout: &self.texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&diffuse_view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.gpu_sampler) },
-                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&gpu_mesh.normal_view) },
-                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&gpu_mesh.mask_view) },
-                        wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&gpu_mesh.emissive_view) },
-                    ],
-                });
+                gpu_mesh.texture_bind_group =
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("texture_bg"),
+                        layout: &self.texture_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&diffuse_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&self.gpu_sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(&gpu_mesh.normal_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::TextureView(&gpu_mesh.mask_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: wgpu::BindingResource::TextureView(
+                                    &gpu_mesh.emissive_view,
+                                ),
+                            },
+                        ],
+                    });
             }
         }
     }
@@ -369,11 +488,12 @@ impl ModelRenderer {
         let eye = camera.eye_position();
 
         let to_target = normalize(sub(camera.target, eye));
-        let light_dir = normalize([
-            to_target[0] + 0.3,
-            to_target[1] + 0.5,
-            to_target[2] + 0.2,
-        ]);
+        let light_dir = normalize([to_target[0] + 0.3, to_target[1] + 0.5, to_target[2] + 0.2]);
+
+        let model_flags = match self.model_type {
+            ModelType::Equipment => 1u32,
+            ModelType::Background => 0u32,
+        };
 
         let uniforms = Uniforms {
             view_proj: vp,
@@ -384,7 +504,7 @@ impl ModelRenderer {
             ambient_sky: [0.25, 0.27, 0.35],
             _pad2: 0.0,
             ambient_ground: [0.10, 0.08, 0.06],
-            _pad3: 0.0,
+            model_flags,
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -400,7 +520,12 @@ impl ModelRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.12, g: 0.12, b: 0.14, a: 1.0 }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.12,
+                            g: 0.12,
+                            b: 0.14,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -432,6 +557,11 @@ impl ModelRenderer {
         self.color_texture.as_ref().map(|(_, v)| v)
     }
 
+    /// 设置模型类型，影响 shader 中的光照和材质处理方式
+    pub fn set_model_type(&mut self, model_type: ModelType) {
+        self.model_type = model_type;
+    }
+
     pub fn has_mesh(&self) -> bool {
         !self.meshes.is_empty()
     }
@@ -448,7 +578,11 @@ impl ModelRenderer {
         }
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen_color"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -458,7 +592,11 @@ impl ModelRenderer {
         });
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,

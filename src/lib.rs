@@ -3,7 +3,7 @@ mod config;
 mod domain;
 mod dye;
 mod fonts;
-mod game;
+pub mod game;
 mod glamour;
 mod loading;
 mod schema;

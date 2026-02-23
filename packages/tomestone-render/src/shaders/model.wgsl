@@ -81,10 +81,17 @@ struct VsOut {
     tn.z = sqrt(max(1.0 - tn.x * tn.x - tn.y * tn.y, 0.0));
     let n = normalize(TBN * tn);
 
-    // ---- 遮罩贴图: R=specular_power, G=roughness, B=ao ----
+    // ---- 遮罩贴图 ----
+    // 装备: R=specular_power, G=roughness, B=ao
+    // BG: R=specular_power, G=roughness, B 通道为 0（不含 AO）
     let mask_spec = mask_sample.r;
     let mask_rough = mask_sample.g;
-    let mask_ao = mask_sample.b;
+    var mask_ao: f32;
+    if is_equipment {
+        mask_ao = mask_sample.b;
+    } else {
+        mask_ao = 1.0;
+    }
 
     // ---- 顶点颜色材质属性 ----
     // 装备模型: 顶点颜色用于遮罩 (R=高光, G=粗糙度, B=漫反射)

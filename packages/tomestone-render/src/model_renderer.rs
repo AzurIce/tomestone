@@ -501,9 +501,9 @@ impl ModelRenderer {
             _pad0: 0.0,
             light_dir,
             _pad1: 0.0,
-            ambient_sky: [0.25, 0.27, 0.35],
+            ambient_sky: [0.45, 0.47, 0.55],
             _pad2: 0.0,
-            ambient_ground: [0.10, 0.08, 0.06],
+            ambient_ground: [0.25, 0.22, 0.20],
             model_flags,
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
@@ -557,6 +557,11 @@ impl ModelRenderer {
         self.color_texture.as_ref().map(|(_, v)| v)
     }
 
+    /// 获取离屏渲染结果的 Texture 引用（用于 copy 操作）
+    pub fn color_texture_ref(&self) -> Option<&wgpu::Texture> {
+        self.color_texture.as_ref().map(|(t, _)| t)
+    }
+
     /// 设置模型类型，影响 shader 中的光照和材质处理方式
     pub fn set_model_type(&mut self, model_type: ModelType) {
         self.model_type = model_type;
@@ -587,7 +592,9 @@ impl ModelRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let depth = device.create_texture(&wgpu::TextureDescriptor {

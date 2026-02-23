@@ -28,6 +28,8 @@ rfd = "0.15"
 
 [dev-dependencies]
 egui_kittest = { version = "0.33", features = ["wgpu", "snapshot"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+pollster = "0.4"
 
 [profile.dev]
 overflow-checks = false

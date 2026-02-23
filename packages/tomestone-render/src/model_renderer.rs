@@ -1,8 +1,8 @@
 use crate::camera::Camera;
 use crate::math::{normalize, sub};
-use crate::types::{MeshTextures, ModelType, TextureData, Vertex};
+use crate::types::{MeshTextures, ModelType, SceneSettings, TextureData, Vertex};
 
-/// Uniform buffer 数据 (16-byte aligned fields)
+/// Uniform buffer 数据 (16-byte aligned fields, 匹配 WGSL Uniforms 布局)
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
@@ -11,11 +11,15 @@ struct Uniforms {
     _pad0: f32,
     light_dir: [f32; 3],
     _pad1: f32,
-    ambient_sky: [f32; 3],
+    light_color: [f32; 3],
     _pad2: f32,
+    ambient_sky: [f32; 3],
+    _pad3: f32,
     ambient_ground: [f32; 3],
+    fresnel_intensity: f32,
     /// bit0: 1=Equipment(使用顶点颜色遮罩+法线alpha裁剪), 0=Background
     model_flags: u32,
+    _pad4: [f32; 3],
 }
 
 struct GpuMesh {
@@ -477,6 +481,7 @@ impl ModelRenderer {
         width: u32,
         height: u32,
         camera: &Camera,
+        scene: &SceneSettings,
     ) {
         if self.meshes.is_empty() || width == 0 || height == 0 {
             return;
@@ -488,7 +493,7 @@ impl ModelRenderer {
         let eye = camera.eye_position();
 
         let to_target = normalize(sub(camera.target, eye));
-        let light_dir = normalize([to_target[0] + 0.3, to_target[1] + 0.5, to_target[2] + 0.2]);
+        let light_dir = normalize(SceneSettings::light_dir_from_camera(to_target));
 
         let model_flags = match self.model_type {
             ModelType::Equipment => 1u32,
@@ -501,10 +506,14 @@ impl ModelRenderer {
             _pad0: 0.0,
             light_dir,
             _pad1: 0.0,
-            ambient_sky: [0.45, 0.47, 0.55],
+            light_color: scene.light_color,
             _pad2: 0.0,
-            ambient_ground: [0.25, 0.22, 0.20],
+            ambient_sky: scene.ambient_sky,
+            _pad3: 0.0,
+            ambient_ground: scene.ambient_ground,
+            fresnel_intensity: scene.fresnel_intensity,
             model_flags,
+            _pad4: [0.0; 3],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
@@ -513,6 +522,7 @@ impl ModelRenderer {
             let color_view = &self.color_texture.as_ref().unwrap().1;
             let depth_view = &self.depth_texture.as_ref().unwrap().1;
 
+            let bg = &scene.background_color;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("model_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -521,10 +531,10 @@ impl ModelRenderer {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.12,
-                            g: 0.12,
-                            b: 0.14,
-                            a: 1.0,
+                            r: bg[0],
+                            g: bg[1],
+                            b: bg[2],
+                            a: bg[3],
                         }),
                         store: wgpu::StoreOp::Store,
                     },

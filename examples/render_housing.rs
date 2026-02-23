@@ -7,7 +7,7 @@ use tomestone::game::{
     compute_bounding_box, extract_mdl_paths_from_sgb, load_housing_mesh_textures, load_mdl,
     GameData, MeshData,
 };
-use tomestone_render::{Camera, ModelRenderer, ModelType};
+use tomestone_render::{Camera, ModelRenderer, ModelType, SceneSettings};
 
 const INSTALL_DIR: &str = r"G:\最终幻想XIV";
 const WIDTH: u32 = 512;
@@ -96,7 +96,7 @@ async fn run() {
         let mut camera = Camera::default();
         camera.focus_on(&bbox);
 
-        renderer.render_offscreen(&device, &queue, WIDTH, HEIGHT, &camera);
+        renderer.render_offscreen(&device, &queue, WIDTH, HEIGHT, &camera, &SceneSettings::default());
 
         // 读回像素
         let pixels = read_pixels(&device, &queue, &renderer, WIDTH, HEIGHT).await;

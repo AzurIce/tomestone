@@ -59,3 +59,44 @@ pub struct MeshTextures {
     pub mask: Option<TextureData>,
     pub emissive: Option<TextureData>,
 }
+
+/// 场景设置：光照、环境光、背景色等可配置参数
+#[derive(Clone, Debug)]
+pub struct SceneSettings {
+    /// 主光源方向（指向光源，会被归一化）
+    pub light_dir: [f32; 3],
+    /// 主光源颜色（含强度，可以 > 1.0 实现更亮的光照）
+    pub light_color: [f32; 3],
+    /// 天空方向环境光颜色
+    pub ambient_sky: [f32; 3],
+    /// 地面方向环境光颜色
+    pub ambient_ground: [f32; 3],
+    /// 背景清除色 (RGBA, 0.0~1.0)
+    pub background_color: [f64; 4],
+    /// 菲涅尔边缘光强度 (0.0~1.0)
+    pub fresnel_intensity: f32,
+}
+
+impl Default for SceneSettings {
+    fn default() -> Self {
+        Self {
+            light_dir: [0.3, 0.8, 0.5],
+            light_color: [1.4, 1.35, 1.3],
+            ambient_sky: [0.55, 0.58, 0.68],
+            ambient_ground: [0.35, 0.32, 0.30],
+            background_color: [0.12, 0.12, 0.14, 1.0],
+            fresnel_intensity: 0.15,
+        }
+    }
+}
+
+impl SceneSettings {
+    /// 根据相机方向计算跟随相机的光源方向（"头灯"模式）
+    pub fn light_dir_from_camera(camera_to_target: [f32; 3]) -> [f32; 3] {
+        [
+            camera_to_target[0] + 0.3,
+            camera_to_target[1] + 0.5,
+            camera_to_target[2] + 0.2,
+        ]
+    }
+}

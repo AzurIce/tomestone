@@ -4,8 +4,10 @@ struct Uniforms {
     view_proj: mat4x4<f32>,
     camera_pos: vec3<f32>,
     light_dir: vec3<f32>,
+    light_color: vec3<f32>,
     ambient_sky: vec3<f32>,
     ambient_ground: vec3<f32>,
+    fresnel_intensity: f32,
     // bit0: 1=Equipment(顶点颜色遮罩+法线alpha裁剪), 0=Background
     model_flags: u32,
 };
@@ -129,11 +131,12 @@ struct VsOut {
 
     // 菲涅尔边缘光
     let ndv = max(dot(n, view_dir), 0.0);
-    let fresnel = pow(1.0 - ndv, 5.0) * 0.15;
+    let fresnel = pow(1.0 - ndv, 5.0) * u.fresnel_intensity;
 
     // 最终合成
     let base_color = diffuse_sample.rgb * vc_diffuse_mask;
-    let lit = base_color * mask_ao * (ambient + vec3<f32>(ndl)) + vec3<f32>(spec) + vec3<f32>(fresnel) * base_color;
+    let direct_light = u.light_color * ndl;
+    let lit = base_color * mask_ao * (ambient + direct_light) + u.light_color * vec3<f32>(spec) + vec3<f32>(fresnel) * base_color;
     let final_color = lit + emissive_sample.rgb;
 
     return vec4<f32>(final_color, diffuse_sample.a);

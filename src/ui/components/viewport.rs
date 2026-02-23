@@ -1,11 +1,12 @@
 use eframe::egui;
 use egui_wgpu::wgpu;
-use tomestone_render::{BoundingBox, Camera, ModelRenderer};
+use tomestone_render::{BoundingBox, Camera, ModelRenderer, SceneSettings};
 
 pub struct ViewportState {
     pub render_state: egui_wgpu::RenderState,
     pub model_renderer: ModelRenderer,
     pub camera: Camera,
+    pub scene: SceneSettings,
     pub texture_id: Option<egui::TextureId>,
     pub last_bbox: Option<BoundingBox>,
     /// 脏标记：仅在相机/模型/尺寸变化时重新渲染
@@ -20,6 +21,7 @@ impl ViewportState {
             render_state,
             model_renderer,
             camera: Camera::default(),
+            scene: SceneSettings::default(),
             texture_id: None,
             last_bbox: None,
             dirty: true,
@@ -86,6 +88,7 @@ impl ViewportState {
                     vp_w,
                     vp_h,
                     &self.camera,
+                    &self.scene,
                 );
                 self.dirty = false;
 

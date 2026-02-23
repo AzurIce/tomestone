@@ -71,7 +71,8 @@ impl ViewportState {
         if response.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                self.camera.distance = (self.camera.distance - scroll * 0.005).clamp(0.5, 20.0);
+                self.camera.distance =
+                    (self.camera.distance - scroll * 0.005).clamp(0.1, self.camera.max_distance);
                 self.dirty = true;
             }
         }

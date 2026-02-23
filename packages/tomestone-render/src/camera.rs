@@ -7,6 +7,10 @@ pub struct Camera {
     pub yaw: f32,
     pub pitch: f32,
     pub target: [f32; 3],
+    /// 远裁面距离，根据场景大小动态调整
+    pub far: f32,
+    /// 最大缩放距离，根据场景大小动态调整
+    pub max_distance: f32,
 }
 
 impl Default for Camera {
@@ -16,6 +20,8 @@ impl Default for Camera {
             yaw: std::f32::consts::FRAC_PI_2,
             pitch: 0.3,
             target: [0.0, 0.8, 0.0],
+            far: 100.0,
+            max_distance: 20.0,
         }
     }
 }
@@ -32,15 +38,17 @@ impl Camera {
     pub fn view_proj(&self, aspect: f32) -> [[f32; 4]; 4] {
         let eye = self.eye_position();
         let view = look_at(eye, self.target, [0.0, 1.0, 0.0]);
-        let proj = perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, 100.0);
+        let proj = perspective(std::f32::consts::FRAC_PI_4, aspect, 0.1, self.far);
         mat4_mul(proj, view)
     }
 
-    /// 根据包围盒自动对焦
+    /// 根据包围盒自动对焦，同时调整远裁面和缩放范围
     pub fn focus_on(&mut self, bbox: &BoundingBox) {
         self.target = bbox.center();
         let size = bbox.size();
         self.distance = if size > 0.01 { size * 1.2 } else { 3.0 };
+        self.far = (size * 10.0).max(100.0);
+        self.max_distance = (size * 5.0).max(20.0);
         self.yaw = std::f32::consts::FRAC_PI_2;
         self.pitch = 0.15;
     }

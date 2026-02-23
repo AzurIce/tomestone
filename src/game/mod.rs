@@ -276,14 +276,14 @@ impl GameData {
         if icon_id == 0 {
             return None;
         }
-        let high = icon_id / 1000;
-        let path = format!("ui/icon/{:03}/{:06}_hr1.tex", high, icon_id);
+        let high = icon_id / 1000 * 1000;
+        let path = format!("ui/icon/{:06}/{:06}_hr1.tex", high, icon_id);
 
         if let Some(tex) = self.parsed_tex(&path) {
             return Some(tex);
         }
 
-        let fallback_path = format!("ui/icon/{:03}/{:06}.tex", high, icon_id);
+        let fallback_path = format!("ui/icon/{:06}/{:06}.tex", high, icon_id);
         self.parsed_tex(&fallback_path)
     }
 

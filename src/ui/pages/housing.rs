@@ -125,8 +125,8 @@ impl App {
                         ui.label("类型:");
                         ui.label(item.part_type.display_name());
                         ui.end_row();
-                        ui.label("模型 Key:");
-                        ui.label(format!("{:04}", item.model_key));
+                        ui.label("SGB:");
+                        ui.label(item.sgb_paths.first().map(|s| s.as_str()).unwrap_or("无"));
                         ui.end_row();
                     });
 
@@ -151,44 +151,36 @@ impl App {
     fn load_housing_model(&mut self, idx: usize, item: &HousingExteriorItem, gs: &GameState) {
         self.housing_loaded_model_idx = Some(idx);
 
-        let model_key = item.model_key;
-        let id = format!("{:04}", model_key);
+        // 从 SGB 路径提取 MDL 路径
+        let mut all_mdl_paths: Vec<String> = Vec::new();
+        for sgb_path in &item.sgb_paths {
+            if let Ok(sgb_data) = gs.game.read_file(sgb_path) {
+                let paths = extract_mdl_paths_from_sgb(&sgb_data);
+                for p in paths {
+                    if !all_mdl_paths.contains(&p) {
+                        all_mdl_paths.push(p);
+                    }
+                }
+            }
+        }
 
-        let sgb_path = format!(
-            "bgcommon/hou/outdoor/general/{}/asset/gar_b0_m{}.sgb",
-            id, id
-        );
-
-        let mdl_paths = if let Ok(sgb_data) = gs.game.read_file(&sgb_path) {
-            extract_mdl_paths_from_sgb(&sgb_data)
-        } else {
-            Vec::new()
-        };
-
-        let mdl_candidates: Vec<String> = if mdl_paths.is_empty() {
-            vec![
-                format!(
-                    "bgcommon/hou/outdoor/general/{}/bgparts/gar_b0_m{}_a.mdl",
-                    id, id
-                ),
-                format!(
-                    "bgcommon/hou/outdoor/general/{}/bgparts/gar_b0_m{}_b.mdl",
-                    id, id
-                ),
-                format!(
-                    "bgcommon/hou/outdoor/general/{}/bgparts/gar_b0_m{}.mdl",
-                    id, id
-                ),
-            ]
-        } else {
-            mdl_paths
-        };
+        if all_mdl_paths.is_empty() {
+            let vp = &mut self.housing_viewport;
+            vp.model_renderer.set_mesh_data(
+                &vp.render_state.device,
+                &vp.render_state.queue,
+                &[],
+                &[],
+            );
+            self.housing_viewport.last_bbox = None;
+            return;
+        }
 
         let mut all_meshes: Vec<MeshData> = Vec::new();
         let mut all_material_names: Vec<String> = Vec::new();
         let mut first_mdl_path: Option<String> = None;
 
-        for mdl_path in &mdl_candidates {
+        for mdl_path in &all_mdl_paths {
             match load_mdl(&gs.game, mdl_path) {
                 Ok(result) if !result.meshes.is_empty() => {
                     if first_mdl_path.is_none() {

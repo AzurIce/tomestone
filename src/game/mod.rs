@@ -288,11 +288,11 @@ impl GameData {
     }
 
     /// 加载房屋外装列表
-    /// 从 HousingExterior 表获取 model_key，从 Item 表获取名称和图标
+    /// 从 HousingExterior 表获取 SGB 路径，从 Item 表获取名称和图标
     pub fn load_housing_exterior_list(&self) -> Vec<HousingExteriorItem> {
         let mut physis = self.physis.borrow_mut();
 
-        // 读取 HousingExterior 表获取 model_key
+        // 读取 HousingExterior 表获取 SGB 路径
         let ext_exh = match physis.read_excel_sheet_header("HousingExterior") {
             Ok(h) => h,
             Err(e) => {
@@ -308,34 +308,25 @@ impl GameData {
             }
         };
 
-        // 构建 HousingExterior row_id -> model_key 映射
-        let mut ext_model_keys: std::collections::HashMap<u32, u16> =
+        // 构建 HousingExterior row_id -> SGB 路径列表 映射
+        let mut ext_sgb_paths: std::collections::HashMap<u32, Vec<String>> =
             std::collections::HashMap::new();
-        let mut debug_count = 0;
         for page in &ext_sheet.pages {
             for (row_id, row) in page.into_iter().flatten_subrows() {
-                // 打印前几行的列结构用于调试
-                if debug_count < 5 {
-                    println!(
-                        "HousingExterior row {}: {} 列 {:?}",
-                        row_id,
-                        row.columns.len(),
-                        row.columns
-                            .iter()
-                            .enumerate()
-                            .map(|(i, c)| format!("[{}]={:?}", i, c))
-                            .collect::<Vec<_>>()
-                    );
-                    debug_count += 1;
-                }
-                if let Some(model_key) = Self::extract_housing_exterior_model(row) {
-                    if model_key > 0 {
-                        ext_model_keys.insert(row_id, model_key);
+                let mut paths = Vec::new();
+                for col in &row.columns {
+                    if let Field::String(s) = col {
+                        if !s.is_empty() && s.ends_with(".sgb") {
+                            paths.push(s.clone());
+                        }
                     }
+                }
+                if !paths.is_empty() {
+                    ext_sgb_paths.insert(row_id, paths);
                 }
             }
         }
-        println!("HousingExterior 表: {} 条有效记录", ext_model_keys.len());
+        println!("HousingExterior 表: {} 条有效记录", ext_sgb_paths.len());
 
         // 读取 Item 表，筛选房屋外装物品
         let item_exh = match physis.read_excel_sheet_header("Item") {
@@ -357,13 +348,13 @@ impl GameData {
         let mut items = Vec::new();
         for page in &item_sheet.pages {
             for (row_id, row) in page.into_iter().flatten_subrows() {
-                if let Some(item) = Self::parse_housing_exterior_row(row_id, row, &ext_model_keys) {
+                if let Some(item) = Self::parse_housing_exterior_row(row_id, row, &ext_sgb_paths) {
                     if items.len() < 5 {
                         println!(
-                            "  外装物品: {} [{}] model_key={:04}",
+                            "  外装物品: {} [{}] sgb={}",
                             item.name,
                             item.part_type.display_name(),
-                            item.model_key
+                            item.sgb_paths.first().unwrap_or(&String::new()),
                         );
                     }
                     items.push(item);
@@ -374,42 +365,10 @@ impl GameData {
         items
     }
 
-    fn extract_housing_exterior_model(row: &Row) -> Option<u16> {
-        // HousingExterior 表结构 (SaintCoinach):
-        // col 0, 1 = unknown
-        // col 2 = PlaceName (UInt16, link)
-        // col 3 = HousingSize (UInt8)
-        // col 4 = Model (UInt16)
-        //
-        // 在 physis 中，列按 EXH 定义的 (type, offset) 排列
-        // 尝试多种策略提取 Model 值
-
-        // 策略1: 如果列数 >= 5，直接取 col 4
-        if row.columns.len() >= 5 {
-            match &row.columns[4] {
-                Field::UInt16(v) if *v > 0 => return Some(*v),
-                Field::UInt32(v) if *v > 0 => return Some(*v as u16),
-                _ => {}
-            }
-        }
-
-        // 策略2: 遍历所有列，找最后一个非零 UInt16
-        // (Model 通常是最后一个 UInt16 字段)
-        let mut last_u16 = None;
-        for col in &row.columns {
-            if let Field::UInt16(v) = col {
-                if *v > 0 {
-                    last_u16 = Some(*v);
-                }
-            }
-        }
-        last_u16
-    }
-
     fn parse_housing_exterior_row(
         row_id: u32,
         row: &Row,
-        ext_model_keys: &std::collections::HashMap<u32, u16>,
+        ext_sgb_paths: &std::collections::HashMap<u32, Vec<String>>,
     ) -> Option<HousingExteriorItem> {
         const COL_NAME: usize = 0;
         const COL_ICON: usize = 10;
@@ -440,8 +399,8 @@ impl GameData {
             _ => return None,
         };
 
-        // 从 HousingExterior 表获取 model_key
-        let model_key = *ext_model_keys.get(&additional_data)?;
+        // 从 HousingExterior 表获取 SGB 路径
+        let sgb_paths = ext_sgb_paths.get(&additional_data)?.clone();
 
         let name = match row.columns.get(COL_NAME)? {
             Field::String(s) => {
@@ -464,7 +423,7 @@ impl GameData {
             name,
             icon_id,
             part_type,
-            model_key,
+            sgb_paths,
         })
     }
 }

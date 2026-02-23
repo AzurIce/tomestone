@@ -74,7 +74,8 @@ pub struct HousingExteriorItem {
     pub name: String,
     pub icon_id: u32,
     pub part_type: ExteriorPartType,
-    pub model_key: u16,
+    /// SGB 文件路径列表（不同尺寸的房屋对应不同 SGB）
+    pub sgb_paths: Vec<String>,
 }
 
 // ── 视图模式 & 排序 ──

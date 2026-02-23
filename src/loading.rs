@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use physis::stm::StainingTemplate;
 
-use crate::domain::{build_equipment_sets, EquipmentItem, EquipmentSet, StainEntry, ALL_SLOTS};
+use crate::domain::{
+    build_equipment_sets, EquipmentItem, EquipmentSet, HousingExteriorItem, StainEntry, ALL_SLOTS,
+};
 use crate::game::GameData;
 use crate::glamour;
 use crate::ui::pages::resource::ResourceBrowserState;
@@ -18,6 +20,7 @@ pub struct GameState {
     pub item_id_map: HashMap<u32, usize>,
     pub glamour_sets: Vec<glamour::GlamourSet>,
     pub resource_browser: ResourceBrowserState,
+    pub housing_exteriors: Vec<HousingExteriorItem>,
 }
 
 pub enum LoadProgress {
@@ -32,6 +35,7 @@ pub struct LoadedData {
     pub stains: Vec<StainEntry>,
     pub stm: Option<StainingTemplate>,
     pub all_table_names: Vec<String>,
+    pub housing_exteriors: Vec<HousingExteriorItem>,
 }
 
 pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<LoadProgress>) {
@@ -56,12 +60,16 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let mut all_table_names = game.get_all_sheet_names();
     all_table_names.sort();
 
+    let _ = tx.send(LoadProgress::Status("正在加载房屋外装列表...".to_string()));
+    let housing_exteriors = game.load_housing_exterior_list();
+
     let _ = tx.send(LoadProgress::Done(Box::new(LoadedData {
         game,
         items,
         stains,
         stm,
         all_table_names,
+        housing_exteriors,
     })));
 }
 
@@ -111,6 +119,7 @@ impl GameState {
             item_id_map,
             glamour_sets,
             resource_browser,
+            housing_exteriors: data.housing_exteriors,
         }
     }
 }

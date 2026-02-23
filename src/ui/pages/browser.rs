@@ -300,5 +300,6 @@ impl App {
             &vp.render_state.queue,
             &new_textures,
         );
+        self.viewport.mark_dirty();
     }
 }

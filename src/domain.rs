@@ -6,8 +6,75 @@ use std::collections::BTreeMap;
 pub enum AppPage {
     Browser,
     GlamourManager,
+    HousingBrowser,
     ResourceBrowser,
     Test,
+}
+
+// ── 房屋外装类型 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExteriorPartType {
+    Roof,
+    Wall,
+    Window,
+    Door,
+    RoofDecoration,
+    WallDecoration,
+    Placard,
+    Fence,
+}
+
+impl ExteriorPartType {
+    /// 从 ItemUICategory 映射
+    pub fn from_ui_category(cat: u8) -> Option<Self> {
+        match cat {
+            65 => Some(Self::Roof),
+            66 => Some(Self::Wall),
+            67 => Some(Self::Window),
+            68 => Some(Self::Door),
+            69 => Some(Self::RoofDecoration),
+            70 => Some(Self::WallDecoration),
+            71 => Some(Self::Placard),
+            72 => Some(Self::Fence),
+            _ => None,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Roof => "屋根",
+            Self::Wall => "外壁",
+            Self::Window => "窓",
+            Self::Door => "扉",
+            Self::RoofDecoration => "屋根装飾",
+            Self::WallDecoration => "外壁装飾",
+            Self::Placard => "看板",
+            Self::Fence => "塀",
+        }
+    }
+}
+
+pub const EXTERIOR_PART_TYPES: [ExteriorPartType; 8] = [
+    ExteriorPartType::Roof,
+    ExteriorPartType::Wall,
+    ExteriorPartType::Window,
+    ExteriorPartType::Door,
+    ExteriorPartType::RoofDecoration,
+    ExteriorPartType::WallDecoration,
+    ExteriorPartType::Placard,
+    ExteriorPartType::Fence,
+];
+
+// ── 房屋外装物品 ──
+
+#[derive(Debug, Clone)]
+pub struct HousingExteriorItem {
+    pub row_id: u32,
+    pub name: String,
+    pub icon_id: u32,
+    pub part_type: ExteriorPartType,
+    pub model_key: u16,
 }
 
 // ── 视图模式 & 排序 ──

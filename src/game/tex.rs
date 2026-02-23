@@ -101,22 +101,11 @@ pub fn bake_color_table_texture(
     }
 }
 
-fn load_material_textures(
+fn load_material_textures_from_candidates(
     game: &GameData,
-    short_name: &str,
-    set_id: u16,
-    variant_id: u16,
+    candidates: &[String],
 ) -> Option<(MeshTextures, CachedMaterial)> {
-    let candidates: Vec<String> = if variant_id != 1 {
-        vec![
-            resolve_material_path(short_name, set_id, variant_id),
-            resolve_material_path(short_name, set_id, 1),
-        ]
-    } else {
-        vec![resolve_material_path(short_name, set_id, 1)]
-    };
-
-    for material_path in &candidates {
+    for material_path in candidates {
         println!("    尝试 MTRL: {}", material_path);
 
         let material = match game.parsed_mtrl(material_path) {
@@ -327,6 +316,55 @@ pub fn load_mesh_textures(
     set_id: u16,
     variant_id: u16,
 ) -> MaterialLoadResult {
+    load_mesh_textures_with_resolver(game, material_names, meshes, |short_name| {
+        let candidates: Vec<String> = if variant_id != 1 {
+            vec![
+                resolve_material_path(short_name, set_id, variant_id),
+                resolve_material_path(short_name, set_id, 1),
+            ]
+        } else {
+            vec![resolve_material_path(short_name, set_id, 1)]
+        };
+        candidates
+    })
+}
+
+/// 加载房屋外装模型的纹理
+/// 材质路径格式: bgcommon/hou/outdoor/general/{id:04}/material/...
+pub fn load_housing_mesh_textures(
+    game: &GameData,
+    material_names: &[String],
+    meshes: &[MeshData],
+    mdl_path: &str,
+) -> MaterialLoadResult {
+    // 从 MDL 路径推导材质目录
+    // MDL 路径示例: bgcommon/hou/outdoor/general/0001/bgparts/gar_b0_m0001_b.mdl
+    // 材质路径示例: bgcommon/hou/outdoor/general/0001/material/mt_gar_b0_m0001_b_a.mtrl
+    let base_dir = if let Some(pos) = mdl_path.rfind('/') {
+        // 从 bgparts/ 或 asset/ 上一级
+        let parent = &mdl_path[..pos];
+        if let Some(pos2) = parent.rfind('/') {
+            &parent[..pos2]
+        } else {
+            parent
+        }
+    } else {
+        ""
+    };
+
+    let material_dir = format!("{}/material", base_dir);
+
+    load_mesh_textures_with_resolver(game, material_names, meshes, |short_name| {
+        vec![format!("{}{}", material_dir, short_name)]
+    })
+}
+
+fn load_mesh_textures_with_resolver(
+    game: &GameData,
+    material_names: &[String],
+    meshes: &[MeshData],
+    resolve_fn: impl Fn(&str) -> Vec<String>,
+) -> MaterialLoadResult {
     let mut tex_cache: HashMap<u16, MeshTextures> = HashMap::new();
     let mut mat_cache: HashMap<u16, CachedMaterial> = HashMap::new();
 
@@ -336,7 +374,8 @@ pub fn load_mesh_textures(
         if !tex_cache.contains_key(&mat_idx) {
             let (mtex, cached_mat) = if let Some(name) = material_names.get(mat_idx as usize) {
                 println!("  材质 [{}]: {}", mat_idx, name);
-                match load_material_textures(game, name, set_id, variant_id) {
+                let candidates = resolve_fn(name);
+                match load_material_textures_from_candidates(game, &candidates) {
                     Some((mt, cm)) => {
                         println!(
                             "    纹理加载成功: {}x{} normal={} mask={} emissive={}",

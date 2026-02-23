@@ -6,6 +6,7 @@ use eframe::egui;
 
 use crate::config;
 use crate::domain::EquipSlot;
+use crate::domain::ExteriorPartType;
 use crate::game::{CachedMaterial, GameData, MeshData};
 use crate::glamour;
 use crate::loading::*;
@@ -52,12 +53,19 @@ pub struct App {
     pub test_total: u64,
     pub test_current: u64,
     pub icon_cache: HashMap<u32, egui::TextureHandle>,
+    // 房屋外装浏览器状态
+    pub housing_viewport: ViewportState,
+    pub housing_selected_part_type: Option<ExteriorPartType>,
+    pub housing_selected_item: Option<usize>,
+    pub housing_loaded_model_idx: Option<usize>,
+    pub housing_search: String,
 }
 
 impl App {
     pub fn new(render_state: egui_wgpu::RenderState) -> Self {
         let config = config::load_config();
         let viewport = ViewportState::new(render_state.clone());
+        let housing_viewport = ViewportState::new(render_state.clone());
 
         let phase = if let Some(dir) = &config.game_install_dir {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -103,6 +111,11 @@ impl App {
             test_total: 100,
             test_current: 0,
             icon_cache: HashMap::new(),
+            housing_viewport,
+            housing_selected_part_type: None,
+            housing_selected_item: None,
+            housing_loaded_model_idx: None,
+            housing_search: String::new(),
         }
     }
 
@@ -147,6 +160,8 @@ impl App {
         self.game_state = None;
         self.loaded_model_idx = None;
         self.viewport.free_texture();
+        self.housing_loaded_model_idx = None;
+        self.housing_viewport.free_texture();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             load_game_data_thread(install_dir, tx);
@@ -227,6 +242,11 @@ impl App {
                 );
                 ui.selectable_value(
                     &mut self.current_page,
+                    crate::domain::AppPage::HousingBrowser,
+                    "房屋外装",
+                );
+                ui.selectable_value(
+                    &mut self.current_page,
                     crate::domain::AppPage::ResourceBrowser,
                     "EXD 浏览器",
                 );
@@ -255,6 +275,7 @@ impl App {
         match self.current_page {
             crate::domain::AppPage::Browser => self.show_browser_page(ctx, gs),
             crate::domain::AppPage::GlamourManager => self.show_glamour_manager_page(ctx, gs),
+            crate::domain::AppPage::HousingBrowser => self.show_housing_page(ctx, gs),
             crate::domain::AppPage::ResourceBrowser => gs.resource_browser.show(ctx, &gs.game),
             crate::domain::AppPage::Test => self.show_test_page(ctx),
         }

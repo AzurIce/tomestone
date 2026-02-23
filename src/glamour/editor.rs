@@ -326,6 +326,7 @@ impl GlamourEditor {
             &self.viewport.render_state.queue,
             &new_textures,
         );
+        self.viewport.mark_dirty();
     }
 
     fn rebuild_detail_viewport(&mut self, item: &EquipmentItem, game: &GameData) {
@@ -428,6 +429,7 @@ impl GlamourEditor {
             &self.detail_viewport.render_state.queue,
             &new_textures,
         );
+        self.detail_viewport.mark_dirty();
     }
 
     pub fn show(&mut self, ctx: &egui::Context, app: &AppContext<'_>) -> GlamourEditorAction {

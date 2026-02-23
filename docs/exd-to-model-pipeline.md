@@ -346,15 +346,173 @@ Ornament 表
   └── Model (直接值，非 link)
 ```
 
-### 7.4 家具 (HousingFurniture)
+### 7.4 家具 (HousingFurniture / HousingYardObject)
+
+室内家具和室外庭院物品分别存储在两张表中，通过 Item 表的 `AdditionalData` 字段关联。
 
 ```
-HousingFurniture 表
-  ├── Item (link) ──→ Item 表
-  └── ModelKey ──→ 家具模型路径
+Item 表 (FilterGroup=14)
+  ├── AdditionalData ──→ HousingFurniture 行 ID (室内)
+  │                  ──→ HousingYardObject 行 ID (室外)
+  └── ItemUICategory ──→ 区分家具子类型
 ```
 
-家具模型在 `bgcommon/hou/` 目录下，路径规则不同于装备。
+#### HousingFurniture 表 (室内家具)
+
+| Schema 字段名 | 列索引 | 类型 | 说明 |
+|---|---|---|---|
+| ModelKey | 0 | UInt16 | 家具模型 ID |
+| HousingItemCategory | 1 | UInt8 | 家具分类 |
+| UsageType | 2 | UInt8 | 使用类型 |
+| UsageParameter | 3 | UInt32 | 使用参数 |
+| AquariumTier | 5 | UInt8 | 水族箱等级 |
+| CustomTalk | 6 | UInt32 (link) | → CustomTalk 表 |
+| Item | 7 | UInt32 (link) | → Item 表 |
+| DestroyOnRemoval | 8 | Bool | 移除时销毁 |
+
+模型路径：
+```
+SGB: bgcommon/hou/indoor/general/{ModelKey:04}/asset/fun_b0_m{ModelKey:04}.sgb
+MDL: (从 SGB 中提取，通常在 bgparts/ 子目录下)
+```
+
+#### HousingYardObject 表 (室外庭院物品)
+
+| Schema 字段名 | 列索引 | 类型 | 说明 |
+|---|---|---|---|
+| ModelKey | 0 | UInt16 | 庭院物品模型 ID |
+| HousingItemCategory | 1 | UInt8 | 分类 |
+| UsageType | 2 | UInt8 | 使用类型 |
+| UsageParameter | 3 | UInt32 | 使用参数 |
+| CustomTalk | 5 | UInt32 (link) | → CustomTalk 表 |
+| Item | 6 | UInt32 (link) | → Item 表 |
+| DestroyOnRemoval | 7 | Bool | 移除时销毁 |
+
+模型路径：
+```
+SGB: bgcommon/hou/outdoor/general/{ModelKey:04}/asset/gar_b0_m{ModelKey:04}.sgb
+MDL: (从 SGB 中提取)
+```
+
+### 7.5 房屋外装 (HousingExterior)
+
+房屋外装（屋顶、外墙、窗户、门等建筑部件）通过 `HousingExterior` 表管理。
+
+```
+Item 表 (FilterGroup=14, ItemUICategory=65~72)
+  └── AdditionalData ──→ HousingExterior 行 ID
+                              └── Model ──→ 外装模型 ID
+```
+
+#### HousingExterior 表
+
+| Schema 字段名 | 列索引 | 类型 | 说明 |
+|---|---|---|---|
+| (unknown) | 0-1 | - | 未知字段 |
+| PlaceName | 2 | UInt16 (link) | → PlaceName 表 |
+| HousingSize | 3 | UInt8 | 房屋尺寸 (S/M/L) |
+| Model | 4 | UInt16 | 外装模型 ID |
+
+> 来源: [SaintCoinach/HousingExterior.json](https://github.com/xivapi/SaintCoinach/master/SaintCoinach/Definitions/HousingExterior.json)
+
+#### ItemUICategory 外装类型
+
+| ItemUICategory | 英文名 | 中文名 | 说明 |
+|---|---|---|---|
+| 65 | Roof | 屋根 | 屋顶 |
+| 66 | Exterior Wall | 外壁 | 外墙 |
+| 67 | Window | 窓 | 窗户 |
+| 68 | Door | 扉 | 门 |
+| 69 | Roof Decoration | 屋根装飾 | 屋顶装饰 |
+| 70 | Exterior Wall Decoration | 外壁装飾 | 外墙装饰 |
+| 71 | Placard | 看板 | 门牌 |
+| 72 | Fence | 塀 | 围栏 |
+
+#### 外装模型路径
+
+外装模型同样使用 SGB 容器，路径格式：
+
+```
+SGB: bgcommon/hou/outdoor/general/{Model:04}/asset/gar_b0_m{Model:04}.sgb
+```
+
+SGB 文件内部引用的 MDL 路径通常为：
+```
+bgcommon/hou/outdoor/general/{Model:04}/bgparts/gar_b0_m{Model:04}_{part}.mdl
+```
+
+其中 `{part}` 为 `a`, `b`, `c` 等，一个外装可能由多个 MDL 部件组成。
+
+#### 外装材质路径
+
+材质路径从 MDL 所在目录的上级推导：
+```
+bgcommon/hou/outdoor/general/{Model:04}/material/{material_short_name}
+```
+
+MDL 内嵌的材质短名格式如 `/mt_gar_b0_m{Model:04}_{part}_a.mtrl`。
+
+### 7.6 房屋相关的 SGB 文件格式
+
+SGB (Scene Group Binary) 是场景容器文件，包含对 MDL 模型和其他资源的引用。
+
+#### SGB 头部结构
+
+```
+偏移   类型    说明
+0x00   char[4] magic ("SGB1")
+...
+0x14   i32     chunk_offset (从文件头偏移 20 处读取)
+```
+
+#### 字符串区域定位
+
+```
+1. 读取偏移 0x14 处的 i32 值 → skip
+2. 跳转到 skip + 20 + 4
+3. 读取 i32 → strings_offset
+4. 字符串区域起始 = (skip + 20) + strings_offset
+```
+
+#### 字符串区域格式
+
+字符串区域包含以 null (`0x00`) 分隔的路径字符串，以 `0xFF` 结束。
+从中筛选 `.mdl` 结尾的路径即为该场景引用的模型文件。
+
+> 参考实现: [TexTools/Housing.cs GetAdditionalAssets()](https://github.com/TexTools/xivModdingFramework/blob/master/xivModdingFramework/Items/Categories/Housing.cs)
+
+### 7.7 房屋数据完整链路示例
+
+以 "石板屋顶" (假设 row_id=27000) 为例：
+
+```
+Step 1: 从 Item 表读取行
+  ├── Name = "石板屋顶"
+  ├── FilterGroup = 14              ← 房屋物品
+  ├── ItemUICategory = 65           ← Roof (屋顶)
+  ├── AdditionalData = 42           ← HousingExterior 行 ID
+  └── Icon = 59401
+
+Step 2: 从 HousingExterior 表读取行 42
+  └── Model = 5                     ← 外装模型 ID
+
+Step 3: 构建 SGB 路径
+  bgcommon/hou/outdoor/general/0005/asset/gar_b0_m0005.sgb
+
+Step 4: 解析 SGB → 提取 MDL 路径列表
+  [
+    "bgcommon/hou/outdoor/general/0005/bgparts/gar_b0_m0005_a.mdl",
+    "bgcommon/hou/outdoor/general/0005/bgparts/gar_b0_m0005_b.mdl",
+  ]
+
+Step 5: 加载所有 MDL → 合并网格
+  每个 MDL 内嵌材质短名如 "/mt_gar_b0_m0005_a_a.mtrl"
+
+Step 6: 构建 MTRL 路径
+  bgcommon/hou/outdoor/general/0005/material/mt_gar_b0_m0005_a_a.mtrl
+
+Step 7: 解析 MTRL → 加载纹理 → 渲染
+```
 
 ## 8. 染色相关表
 

@@ -8,7 +8,7 @@ use crate::loading::{glamour_slot_summary, GameState};
 impl App {
     pub fn show_glamour_manager_page(&mut self, ctx: &egui::Context, gs: &mut GameState) {
         if let Some(mut editor) = self.glamour_editor.take() {
-            let app_ctx = AppContext {
+            let mut app_ctx = AppContext {
                 items: &gs.items,
                 item_id_map: &gs.item_id_map,
                 stains: &gs.stains,
@@ -16,8 +16,9 @@ impl App {
                 game: &gs.game,
                 equipment_sets: &gs.equipment_sets,
                 set_id_to_set_idx: &gs.set_id_to_set_idx,
+                icon_cache: &mut self.icon_cache,
             };
-            let action = editor.show(ctx, &app_ctx);
+            let action = editor.show(ctx, &mut app_ctx);
             match action {
                 glamour::GlamourEditorAction::Save => {
                     if let Some(idx) = self.editing_glamour_idx {

@@ -25,6 +25,7 @@ pub struct AppContext<'a> {
     pub game: &'a GameData,
     pub equipment_sets: &'a [EquipmentSet],
     pub set_id_to_set_idx: &'a HashMap<u16, usize>,
+    pub icon_cache: &'a mut HashMap<u32, Option<egui::TextureHandle>>,
 }
 
 struct SlotState {
@@ -432,7 +433,7 @@ impl GlamourEditor {
         self.detail_viewport.mark_dirty();
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, app: &AppContext<'_>) -> GlamourEditorAction {
+    pub fn show(&mut self, ctx: &egui::Context, app: &mut AppContext<'_>) -> GlamourEditorAction {
         if self.needs_mesh_rebuild {
             self.rebuild_merged_meshes(app.items, app.item_id_map, app.game);
             self.detail_needs_rebuild = true;
@@ -513,6 +514,9 @@ impl GlamourEditor {
                     None, // 不按槽位筛选
                     &highlight,
                     "glamour",
+                    app.icon_cache,
+                    ctx,
+                    app.game,
                 ) {
                     self.preview_item_id = Some(clicked.item_id);
                     self.preview_stain_ids = [0, 0];

@@ -81,6 +81,23 @@ pub struct HousingExteriorItem {
 // ── 视图模式 & 排序 ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    /// 列表视图: 按套装分组折叠
+    List,
+    /// 表格视图: 扁平列表，带图标，虚拟滚动
+    Table,
+}
+
+impl ViewMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::List => "列表",
+            Self::Table => "表格",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOrder {
     ByName,
     BySetId,

@@ -35,20 +35,36 @@ async fn run() {
         .expect("无法获取 GPU device");
 
     let game = GameData::new(Path::new(INSTALL_DIR));
-    let items = game.load_housing_exterior_list();
+    let all_items = game.load_all_items();
+    let sgb_map = game.load_housing_sgb_paths();
+
+    // 筛选房屋外装物品
+    let housing_items: Vec<_> = all_items
+        .iter()
+        .filter(|i| i.is_housing_exterior() && sgb_map.contains_key(&i.additional_data))
+        .collect();
 
     // 每种类型渲染第一个
     let types = ["屋根", "外壁", "窓", "扉", "塀"];
     for type_name in &types {
-        let item = match items.iter().find(|i| i.part_type.display_name() == *type_name) {
+        let item = match housing_items.iter().find(|i| {
+            i.exterior_part_type()
+                .map(|pt| pt.display_name() == *type_name)
+                .unwrap_or(false)
+        }) {
             Some(i) => i,
             None => continue,
         };
 
         println!("渲染 [{}] {}", type_name, item.name);
 
+        let sgb_paths = match sgb_map.get(&item.additional_data) {
+            Some(p) => p,
+            None => continue,
+        };
+
         let mut all_mdl_paths: Vec<String> = Vec::new();
-        for sgb_path in &item.sgb_paths {
+        for sgb_path in sgb_paths {
             if let Ok(data) = game.read_file(sgb_path) {
                 for p in extract_mdl_paths_from_sgb(&data) {
                     if !all_mdl_paths.contains(&p) {

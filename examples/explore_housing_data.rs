@@ -9,7 +9,14 @@ const INSTALL_DIR: &str = r"G:\最终幻想XIV";
 
 fn main() {
     let game = GameData::new(Path::new(INSTALL_DIR));
-    let items = game.load_housing_exterior_list();
+    let all_items = game.load_all_items();
+    let sgb_paths = game.load_housing_sgb_paths();
+
+    // 筛选房屋外装物品
+    let housing_items: Vec<_> = all_items
+        .iter()
+        .filter(|item| item.is_housing_exterior() && sgb_paths.contains_key(&item.additional_data))
+        .collect();
 
     println!("\n=== 按类型分组 ===");
     let types = [
@@ -24,66 +31,36 @@ fn main() {
     ];
 
     for (name, _cat) in &types {
-        let matching: Vec<_> = items
+        let matching: Vec<_> = housing_items
             .iter()
-            .filter(|i| i.part_type.display_name() == *name)
+            .filter(|i| {
+                i.exterior_part_type()
+                    .map(|pt| pt.display_name() == *name)
+                    .unwrap_or(false)
+            })
             .collect();
         println!("\n--- {} ({} 件) ---", name, matching.len());
         for item in matching.iter().take(5) {
             println!(
-                "  {} model_key={:04} row_id={}",
-                item.name, item.model_key, item.row_id
+                "  {} additional_data={:04} row_id={}",
+                item.name, item.additional_data, item.row_id
             );
         }
-        // 统计 model_key 分布
-        let mut keys: Vec<u16> = matching.iter().map(|i| i.model_key).collect();
-        keys.sort();
-        keys.dedup();
-        println!("  唯一 model_key: {:?}", &keys[..keys.len().min(20)]);
     }
 
-    // 对几个不同类型的 model_key，尝试不同路径模式
-    println!("\n=== 路径探测 ===");
-    let test_items: Vec<_> = items
-        .iter()
-        .filter(|i| {
-            i.part_type.display_name() == "屋根"
-                || i.part_type.display_name() == "外壁"
-                || i.part_type.display_name() == "窓"
-                || i.part_type.display_name() == "扉"
-        })
-        .take(20)
-        .collect();
-
-    let path_patterns = [
-        ("gar_b0_m", "sgb"),
-        ("rof_b0_m", "sgb"),
-        ("wal_b0_m", "sgb"),
-        ("win_b0_m", "sgb"),
-        ("dor_b0_m", "sgb"),
-        ("opt_b0_m", "sgb"),
-        ("sig_b0_m", "sgb"),
-        ("fen_b0_m", "sgb"),
-    ];
-
-    for item in &test_items {
-        let id = format!("{:04}", item.model_key);
-        let mut found = Vec::new();
-        for (prefix, ext) in &path_patterns {
-            let path = format!(
-                "bgcommon/hou/outdoor/general/{}/asset/{}{}.{}",
-                id, prefix, id, ext
-            );
-            if game.read_file(&path).is_ok() {
-                found.push(*prefix);
-            }
-        }
+    // 对几个不同类型的物品，展示 SGB 路径
+    println!("\n=== SGB 路径 ===");
+    for item in housing_items.iter().take(20) {
+        let pt_name = item
+            .exterior_part_type()
+            .map(|pt| pt.display_name())
+            .unwrap_or("?");
+        let paths = sgb_paths.get(&item.additional_data);
         println!(
-            "  [{}] {} model_key={}: {:?}",
-            item.part_type.display_name(),
+            "  [{}] {} sgb={:?}",
+            pt_name,
             item.name,
-            item.model_key,
-            found
+            paths.map(|p| p.first().map(|s| s.as_str()).unwrap_or("无"))
         );
     }
 }

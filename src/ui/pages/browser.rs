@@ -4,7 +4,7 @@ use eframe::egui;
 use physis::stm::StainingTemplate;
 
 use crate::app::App;
-use crate::domain::{EquipmentItem, ACCESSORY_SLOTS, GEAR_SLOTS};
+use crate::domain::{GameItem, ACCESSORY_SLOTS, GEAR_SLOTS};
 use crate::dye;
 use crate::game::{
     bake_color_table_texture, compute_bounding_box, load_mdl_with_fallback, load_mesh_textures,
@@ -69,8 +69,8 @@ impl App {
                 if self.selected_slot != prev_slot {
                     // 切换槽位时自动展开当前选中物品所在的套装
                     if let Some(sel_idx) = self.selected_item {
-                        if let Some(item) = gs.items.get(sel_idx) {
-                            self.equipment_list.expanded_sets.insert(item.set_id);
+                        if let Some(item) = gs.all_items.get(sel_idx) {
+                            self.equipment_list.expanded_sets.insert(item.set_id());
                         }
                     }
                 }
@@ -80,7 +80,7 @@ impl App {
                 // 高亮当前选中的物品
                 let selected_ids: HashSet<u32> = self
                     .selected_item
-                    .and_then(|idx| gs.items.get(idx))
+                    .and_then(|idx| gs.all_items.get(idx))
                     .map(|item| {
                         let mut s = HashSet::new();
                         s.insert(item.row_id);
@@ -95,7 +95,8 @@ impl App {
 
                 if let Some(clicked) = self.equipment_list.show(
                     ui,
-                    &gs.items,
+                    &gs.all_items,
+                    &gs.equipment_indices,
                     &gs.equipment_sets,
                     &gs.set_id_to_set_idx,
                     self.selected_slot,
@@ -115,7 +116,7 @@ impl App {
     fn show_browser_detail_panel(&mut self, ctx: &egui::Context, gs: &mut GameState) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(idx) = self.selected_item {
-                if let Some(item) = gs.items.get(idx) {
+                if let Some(item) = gs.all_items.get(idx) {
                     ui.horizontal(|ui| {
                         if let Some(icon) = self.get_or_load_icon(ctx, &gs.game, item.icon_id) {
                             ui.image(&icon);
@@ -125,21 +126,25 @@ impl App {
                     ui.separator();
                     let prefix = if item.is_accessory() { "a" } else { "e" };
                     egui::Grid::new("item_info").show(ui, |ui| {
-                        ui.label("槽位:");
-                        ui.label(item.slot.display_name());
-                        ui.end_row();
+                        if let Some(slot) = item.equip_slot() {
+                            ui.label("槽位:");
+                            ui.label(slot.display_name());
+                            ui.end_row();
+                        }
                         ui.label("装备 ID:");
-                        ui.label(format!("{}{:04}", prefix, item.set_id));
+                        ui.label(format!("{}{:04}", prefix, item.set_id()));
                         ui.end_row();
                         ui.label("变体:");
-                        ui.label(format!("v{:04}", item.variant_id));
+                        ui.label(format!("v{:04}", item.variant_id()));
                         ui.end_row();
-                        ui.label("模型路径:");
-                        ui.label(item.model_path());
-                        ui.end_row();
+                        if let Some(path) = item.model_path() {
+                            ui.label("模型路径:");
+                            ui.label(path);
+                            ui.end_row();
+                        }
                     });
 
-                    if let Some(&set_idx) = gs.set_id_to_set_idx.get(&item.set_id) {
+                    if let Some(&set_idx) = gs.set_id_to_set_idx.get(&item.set_id()) {
                         let eq_set = &gs.equipment_sets[set_idx];
                         if eq_set.item_indices.len() > 1 {
                             ui.separator();
@@ -154,12 +159,10 @@ impl App {
                                 .item_indices
                                 .iter()
                                 .map(|&i| {
-                                    let sib = &gs.items[i];
-                                    (
-                                        i,
-                                        format!("[{}] {}", sib.slot.slot_abbr(), sib.name),
-                                        i == idx,
-                                    )
+                                    let sib = &gs.all_items[i];
+                                    let slot_abbr =
+                                        sib.equip_slot().map(|s| s.slot_abbr()).unwrap_or("?");
+                                    (i, format!("[{}] {}", slot_abbr, sib.name), i == idx)
                                 })
                                 .collect();
                             let mut clicked_sibling: Option<usize> = None;
@@ -212,7 +215,7 @@ impl App {
         });
     }
 
-    fn load_model_for_item(&mut self, idx: usize, item: &EquipmentItem, gs: &GameState) {
+    fn load_model_for_item(&mut self, idx: usize, item: &GameItem, gs: &GameState) {
         self.loaded_model_idx = Some(idx);
         self.selected_stain_ids = [0, 0];
         self.active_dye_channel = 0;
@@ -229,8 +232,8 @@ impl App {
                     &gs.game,
                     &result.material_names,
                     &result.meshes,
-                    item.set_id,
-                    item.variant_id,
+                    item.set_id(),
+                    item.variant_id(),
                 );
                 let geometry: Vec<(&[tomestone_render::Vertex], &[u16])> = result
                     .meshes
@@ -254,8 +257,8 @@ impl App {
             _ => {
                 eprintln!(
                     "模型加载失败 e{:04} v{:04}: {:?}",
-                    item.set_id,
-                    item.variant_id,
+                    item.set_id(),
+                    item.variant_id(),
                     load_mdl_with_fallback(&gs.game, &paths).err()
                 );
                 let vp = &mut self.viewport;

@@ -6,7 +6,7 @@ use physis::stm::StainingTemplate;
 
 use super::GlamourSet;
 use crate::domain::{
-    EquipSlot, EquipmentItem, EquipmentSet, ACCESSORY_SLOTS, ALL_SLOTS, GEAR_SLOTS, RACE_CODES,
+    EquipSlot, EquipmentSet, GameItem, ACCESSORY_SLOTS, ALL_SLOTS, GEAR_SLOTS, RACE_CODES,
 };
 use crate::dye::{apply_dye, has_dual_dye};
 use crate::game::{
@@ -18,11 +18,12 @@ use crate::ui::components::equipment_list::{EquipmentListState, HighlightConfig}
 use crate::ui::components::viewport::ViewportState;
 
 pub struct AppContext<'a> {
-    pub items: &'a [EquipmentItem],
+    pub items: &'a [GameItem],
     pub item_id_map: &'a HashMap<u32, usize>,
     pub stains: &'a [crate::domain::StainEntry],
     pub stm: Option<&'a StainingTemplate>,
     pub game: &'a GameData,
+    pub equipment_indices: &'a [usize],
     pub equipment_sets: &'a [EquipmentSet],
     pub set_id_to_set_idx: &'a HashMap<u16, usize>,
     pub icon_cache: &'a mut HashMap<u32, Option<egui::TextureHandle>>,
@@ -124,13 +125,13 @@ impl GlamourEditor {
 
     fn rebuild_merged_meshes(
         &mut self,
-        items: &[EquipmentItem],
+        items: &[GameItem],
         item_id_map: &HashMap<u32, usize>,
         game: &GameData,
     ) {
         self.needs_mesh_rebuild = false;
 
-        let equipped_items: Vec<(EquipSlot, &EquipmentItem)> = ALL_SLOTS
+        let equipped_items: Vec<(EquipSlot, &GameItem)> = ALL_SLOTS
             .iter()
             .filter_map(|slot| {
                 self.glamour_set
@@ -147,8 +148,9 @@ impl GlamourEditor {
             let mut chosen = RACE_CODES[0];
             for &rc in RACE_CODES {
                 let all_exist = equipped_items.iter().all(|(_, item)| {
-                    let path = item.model_path_for_race(rc);
-                    game.read_file(&path).is_ok()
+                    item.model_path_for_race(rc)
+                        .map(|path| game.read_file(&path).is_ok())
+                        .unwrap_or(false)
                 });
                 if all_exist {
                     chosen = rc;
@@ -186,17 +188,25 @@ impl GlamourEditor {
                 }
             };
 
-            let unified_path = item.model_path_for_race(unified_race);
+            let unified_path = match item.model_path_for_race(unified_race) {
+                Some(p) => p,
+                None => {
+                    state.loaded_item_id = None;
+                    state.mesh_range = all_meshes.len()..all_meshes.len();
+                    continue;
+                }
+            };
             let (load_result_mdl, actual_race) = match load_mdl(game, &unified_path) {
                 Ok(result) if !result.meshes.is_empty() => (Some(result), unified_race.to_string()),
                 _ => {
                     let mut found = (None, String::new());
                     for &rc in RACE_CODES {
-                        let path = item.model_path_for_race(rc);
-                        if let Ok(result) = load_mdl(game, &path) {
-                            if !result.meshes.is_empty() {
-                                found = (Some(result), rc.to_string());
-                                break;
+                        if let Some(path) = item.model_path_for_race(rc) {
+                            if let Ok(result) = load_mdl(game, &path) {
+                                if !result.meshes.is_empty() {
+                                    found = (Some(result), rc.to_string());
+                                    break;
+                                }
                             }
                         }
                     }
@@ -231,8 +241,8 @@ impl GlamourEditor {
                         game,
                         &result.material_names,
                         &result.meshes,
-                        item.set_id,
-                        item.variant_id,
+                        item.set_id(),
+                        item.variant_id(),
                     );
                     state.loaded_item_id = Some(item_id);
                     state.cached_materials = load_result.materials;
@@ -330,7 +340,7 @@ impl GlamourEditor {
         self.viewport.mark_dirty();
     }
 
-    fn rebuild_detail_viewport(&mut self, item: &EquipmentItem, game: &GameData) {
+    fn rebuild_detail_viewport(&mut self, item: &GameItem, game: &GameData) {
         self.detail_needs_rebuild = false;
         self.detail_loaded_item_id = Some(item.row_id);
 
@@ -351,8 +361,8 @@ impl GlamourEditor {
                     game,
                     &result.material_names,
                     &result.meshes,
-                    item.set_id,
-                    item.variant_id,
+                    item.set_id(),
+                    item.variant_id(),
                 );
                 let geometry: Vec<(&[tomestone_render::Vertex], &[u16])> = result
                     .meshes
@@ -509,6 +519,7 @@ impl GlamourEditor {
                 if let Some(clicked) = self.equipment_list.show(
                     ui,
                     app.items,
+                    app.equipment_indices,
                     app.equipment_sets,
                     app.set_id_to_set_idx,
                     None, // 不按槽位筛选
@@ -544,14 +555,19 @@ impl GlamourEditor {
                             let prefix = if item.is_accessory() { "a" } else { "e" };
                             ui.label(format!(
                                 "{}{:04} v{:04}",
-                                prefix, item.set_id, item.variant_id
+                                prefix,
+                                item.set_id(),
+                                item.variant_id()
                             ));
 
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 if ui.button("装备").clicked() {
                                     // 将预览物品装备到对应槽位
-                                    let target_slot = item.slot;
+                                    let target_slot = match item.equip_slot() {
+                                        Some(s) => s,
+                                        None => return,
+                                    };
                                     let stain_ids = self.preview_stain_ids;
                                     self.glamour_set
                                         .set_slot(target_slot, item.row_id, stain_ids);
@@ -610,7 +626,9 @@ impl GlamourEditor {
                             let prefix = if item.is_accessory() { "a" } else { "e" };
                             ui.label(format!(
                                 "{}{:04} v{:04}",
-                                prefix, item.set_id, item.variant_id
+                                prefix,
+                                item.set_id(),
+                                item.variant_id()
                             ));
 
                             ui.add_space(4.0);
@@ -622,7 +640,7 @@ impl GlamourEditor {
                             }
 
                             // 同套装快捷操作
-                            if let Some(&set_idx) = app.set_id_to_set_idx.get(&item.set_id) {
+                            if let Some(&set_idx) = app.set_id_to_set_idx.get(&item.set_id()) {
                                 let eq_set = &app.equipment_sets[set_idx];
                                 if eq_set.item_indices.len() > 1 {
                                     ui.separator();
@@ -638,15 +656,12 @@ impl GlamourEditor {
                                         .item_indices
                                         .iter()
                                         .filter_map(|&i| {
-                                            app.items.get(i).map(|sib| {
-                                                let is_current = i == idx;
-                                                let label = format!(
-                                                    "[{}] {}",
-                                                    sib.slot.slot_abbr(),
-                                                    sib.name
-                                                );
-                                                (i, label, sib.slot, is_current)
-                                            })
+                                            let sib = app.items.get(i)?;
+                                            let sib_slot = sib.equip_slot()?;
+                                            let is_current = i == idx;
+                                            let label =
+                                                format!("[{}] {}", sib_slot.slot_abbr(), sib.name);
+                                            Some((i, label, sib_slot, is_current))
                                         })
                                         .collect();
 
@@ -678,18 +693,20 @@ impl GlamourEditor {
                                     if ui.button("填充整套").clicked() {
                                         for &sib_idx in &eq_set.item_indices {
                                             if let Some(sib_item) = app.items.get(sib_idx) {
-                                                let sib_slot = sib_item.slot;
-                                                if self.glamour_set.get_slot(sib_slot).is_none() {
-                                                    let stain_ids = self
-                                                        .selected_stain_ids
-                                                        .get(&sib_slot)
-                                                        .copied()
-                                                        .unwrap_or([0, 0]);
-                                                    self.glamour_set.set_slot(
-                                                        sib_slot,
-                                                        sib_item.row_id,
-                                                        stain_ids,
-                                                    );
+                                                if let Some(sib_slot) = sib_item.equip_slot() {
+                                                    if self.glamour_set.get_slot(sib_slot).is_none()
+                                                    {
+                                                        let stain_ids = self
+                                                            .selected_stain_ids
+                                                            .get(&sib_slot)
+                                                            .copied()
+                                                            .unwrap_or([0, 0]);
+                                                        self.glamour_set.set_slot(
+                                                            sib_slot,
+                                                            sib_item.row_id,
+                                                            stain_ids,
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }

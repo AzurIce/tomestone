@@ -61,6 +61,7 @@ pub struct App {
     pub housing_loaded_model_idx: Option<usize>,
     pub housing_search: String,
     pub housing_view_mode: ViewMode,
+    pub housing_icon_size: f32,
 }
 
 impl App {
@@ -118,7 +119,8 @@ impl App {
             housing_selected_item: None,
             housing_loaded_model_idx: None,
             housing_search: String::new(),
-            housing_view_mode: ViewMode::Table,
+            housing_view_mode: ViewMode::Grid,
+            housing_icon_size: 48.0,
         }
     }
 

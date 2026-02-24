@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::app::App;
-use crate::domain::{HousingExteriorItem, ViewMode, EXTERIOR_PART_TYPES};
+use crate::domain::{GameItem, ViewMode, EXTERIOR_PART_TYPES};
 use crate::game::{
     compute_bounding_box, extract_mdl_paths_from_sgb, load_housing_mesh_textures, load_mdl,
     MeshData,
@@ -57,35 +57,46 @@ impl App {
                     }
                     if ui
                         .selectable_label(
-                            self.housing_view_mode == ViewMode::Table,
-                            ViewMode::Table.label(),
+                            self.housing_view_mode == ViewMode::Grid,
+                            ViewMode::Grid.label(),
                         )
                         .clicked()
                     {
-                        self.housing_view_mode = ViewMode::Table;
+                        self.housing_view_mode = ViewMode::Grid;
                     }
                 });
 
+                // 图标大小滑块 (仅图标视图)
+                if self.housing_view_mode == ViewMode::Grid {
+                    ui.horizontal(|ui| {
+                        ui.label("图标:");
+                        ui.add(
+                            egui::Slider::new(&mut self.housing_icon_size, 32.0..=128.0)
+                                .suffix("px"),
+                        );
+                    });
+                }
+
                 ui.separator();
 
-                // 物品列表
+                // 物品列表: 从 housing_ext_indices 获取 all_items 中的下标
                 let search_lower = self.housing_search.to_lowercase();
-                let filtered: Vec<(usize, &HousingExteriorItem)> = gs
-                    .housing_exteriors
+                let filtered: Vec<(usize, &GameItem)> = gs
+                    .housing_ext_indices
                     .iter()
-                    .enumerate()
-                    .filter(|(_, item)| {
+                    .filter_map(|&idx| {
+                        let item = &gs.all_items[idx];
                         if let Some(pt) = self.housing_selected_part_type {
-                            if item.part_type != pt {
-                                return false;
+                            if item.exterior_part_type() != Some(pt) {
+                                return None;
                             }
                         }
                         if !search_lower.is_empty()
                             && !item.name.to_lowercase().contains(&search_lower)
                         {
-                            return false;
+                            return None;
                         }
-                        true
+                        Some((idx, item))
                     })
                     .collect();
 
@@ -93,7 +104,95 @@ impl App {
                 ui.separator();
 
                 match self.housing_view_mode {
-                    ViewMode::Table => {
+                    ViewMode::Grid => {
+                        let available_width = ui.available_width();
+                        let icon_size = self.housing_icon_size;
+                        let cell_padding = 4.0;
+                        let text_height = 14.0;
+                        let text_lines = 2;
+                        let cell_width = (icon_size + cell_padding * 2.0).min(available_width);
+                        let cell_height =
+                            icon_size + cell_padding * 2.0 + text_height * text_lines as f32;
+                        let cols = ((available_width / cell_width).floor() as usize).max(1);
+                        let actual_cell_width = available_width / cols as f32;
+                        let total_rows = (filtered.len() + cols - 1) / cols;
+
+                        egui::ScrollArea::vertical()
+                            .id_salt("housing_grid_scroll")
+                            .show_rows(ui, cell_height, total_rows, |ui, row_range| {
+                                for row_idx in row_range {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 0.0;
+                                        let start = row_idx * cols;
+                                        let end = (start + cols).min(filtered.len());
+                                        for i in start..end {
+                                            let (idx, item) = &filtered[i];
+                                            let is_selected =
+                                                self.housing_selected_item == Some(*idx);
+
+                                            let (rect, response) = ui.allocate_exact_size(
+                                                egui::vec2(actual_cell_width, cell_height),
+                                                egui::Sense::click(),
+                                            );
+
+                                            // 背景高亮
+                                            if is_selected || response.hovered() {
+                                                let bg_color = if is_selected {
+                                                    ui.visuals().selection.bg_fill
+                                                } else {
+                                                    ui.visuals().widgets.hovered.bg_fill
+                                                };
+                                                ui.painter().rect_filled(rect, 2.0, bg_color);
+                                            }
+
+                                            // 图标 (居中在上半部分)
+                                            let icon_top = rect.top() + cell_padding;
+                                            let icon_center_x = rect.center().x;
+                                            let icon_rect = egui::Rect::from_center_size(
+                                                egui::pos2(
+                                                    icon_center_x,
+                                                    icon_top + icon_size / 2.0,
+                                                ),
+                                                egui::vec2(icon_size, icon_size),
+                                            );
+                                            if let Some(icon) =
+                                                self.get_or_load_icon(ctx, &gs.game, item.icon_id)
+                                            {
+                                                ui.painter().image(
+                                                    icon.id(),
+                                                    icon_rect,
+                                                    egui::Rect::from_min_max(
+                                                        egui::pos2(0.0, 0.0),
+                                                        egui::pos2(1.0, 1.0),
+                                                    ),
+                                                    egui::Color32::WHITE,
+                                                );
+                                            }
+
+                                            // 文字名称 (图标下方，裁剪到单元格范围)
+                                            let text_top = icon_top + icon_size + cell_padding;
+                                            let text_color = ui.visuals().text_color();
+                                            let clipped = ui.painter().with_clip_rect(rect);
+                                            clipped.text(
+                                                egui::pos2(rect.center().x, text_top),
+                                                egui::Align2::CENTER_TOP,
+                                                &item.name,
+                                                egui::FontId::proportional(11.0),
+                                                text_color,
+                                            );
+
+                                            // tooltip
+                                            response.clone().on_hover_text(&item.name);
+
+                                            if response.clicked() {
+                                                self.housing_selected_item = Some(*idx);
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                    }
+                    ViewMode::List => {
                         let row_height = 28.0;
                         let total_rows = filtered.len();
                         egui::ScrollArea::vertical().show_rows(
@@ -116,38 +215,15 @@ impl App {
                                             ui.allocate_space(egui::vec2(24.0, 24.0));
                                         }
 
-                                        let label = format!(
-                                            "[{}] {}",
-                                            item.part_type.display_name(),
-                                            item.name
-                                        );
+                                        let part_name = item
+                                            .exterior_part_type()
+                                            .map(|pt| pt.display_name())
+                                            .unwrap_or("?");
+                                        let label = format!("[{}] {}", part_name, item.name);
                                         ui.selectable_label(is_selected, label)
                                     });
 
                                     if response.inner.clicked() {
-                                        self.housing_selected_item = Some(*idx);
-                                    }
-                                }
-                            },
-                        );
-                    }
-                    ViewMode::List => {
-                        let row_height = 18.0;
-                        let total_rows = filtered.len();
-                        egui::ScrollArea::vertical().show_rows(
-                            ui,
-                            row_height,
-                            total_rows,
-                            |ui, row_range| {
-                                for i in row_range {
-                                    let (idx, item) = &filtered[i];
-                                    let is_selected = self.housing_selected_item == Some(*idx);
-                                    let label = format!(
-                                        "[{}] {}",
-                                        item.part_type.display_name(),
-                                        item.name
-                                    );
-                                    if ui.selectable_label(is_selected, label).clicked() {
                                         self.housing_selected_item = Some(*idx);
                                     }
                                 }
@@ -163,7 +239,7 @@ impl App {
     fn show_housing_detail_panel(&mut self, ctx: &egui::Context, gs: &mut GameState) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(idx) = self.housing_selected_item {
-                if let Some(item) = gs.housing_exteriors.get(idx) {
+                if let Some(item) = gs.all_items.get(idx) {
                     ui.horizontal(|ui| {
                         if let Some(icon) = self.get_or_load_icon(ctx, &gs.game, item.icon_id) {
                             ui.image(&icon);
@@ -172,12 +248,21 @@ impl App {
                     });
                     ui.separator();
 
+                    let sgb_paths = gs.housing_sgb_paths.get(&item.additional_data);
+
                     egui::Grid::new("housing_item_info").show(ui, |ui| {
-                        ui.label("类型:");
-                        ui.label(item.part_type.display_name());
-                        ui.end_row();
+                        if let Some(pt) = item.exterior_part_type() {
+                            ui.label("类型:");
+                            ui.label(pt.display_name());
+                            ui.end_row();
+                        }
                         ui.label("SGB:");
-                        ui.label(item.sgb_paths.first().map(|s| s.as_str()).unwrap_or("无"));
+                        ui.label(
+                            sgb_paths
+                                .and_then(|p| p.first())
+                                .map(|s| s.as_str())
+                                .unwrap_or("无"),
+                        );
                         ui.end_row();
                     });
 
@@ -199,12 +284,27 @@ impl App {
         });
     }
 
-    fn load_housing_model(&mut self, idx: usize, item: &HousingExteriorItem, gs: &GameState) {
+    fn load_housing_model(&mut self, idx: usize, item: &GameItem, gs: &GameState) {
         self.housing_loaded_model_idx = Some(idx);
 
         // 从 SGB 路径提取 MDL 路径
+        let sgb_paths = match gs.housing_sgb_paths.get(&item.additional_data) {
+            Some(paths) => paths,
+            None => {
+                let vp = &mut self.housing_viewport;
+                vp.model_renderer.set_mesh_data(
+                    &vp.render_state.device,
+                    &vp.render_state.queue,
+                    &[],
+                    &[],
+                );
+                self.housing_viewport.last_bbox = None;
+                return;
+            }
+        };
+
         let mut all_mdl_paths: Vec<String> = Vec::new();
-        for sgb_path in &item.sgb_paths {
+        for sgb_path in sgb_paths {
             if let Ok(sgb_data) = gs.game.read_file(sgb_path) {
                 let paths = extract_mdl_paths_from_sgb(&sgb_data);
                 for p in paths {

@@ -21,7 +21,7 @@ use physis::Language;
 
 use tomestone_render::TextureData;
 
-use crate::domain::{EquipSlot, EquipmentItem, ExteriorPartType, HousingExteriorItem, StainEntry};
+use crate::domain::{GameItem, StainEntry};
 
 pub struct ParsedMaterial {
     pub texture_paths: Vec<String>,
@@ -119,7 +119,8 @@ impl GameData {
             .ok()
     }
 
-    pub fn load_equipment_list(&self) -> Vec<EquipmentItem> {
+    /// 一次性加载 Item 表全部物品，返回统一的 GameItem 列表
+    pub fn load_all_items(&self) -> Vec<GameItem> {
         let mut physis = self.physis.borrow_mut();
 
         let exh = match physis.read_excel_sheet_header("Item") {
@@ -141,12 +142,117 @@ impl GameData {
         let mut items = Vec::new();
         for page in &sheet.pages {
             for (row_id, row) in page.into_iter().flatten_subrows() {
-                if let Some(item) = Self::parse_equipment_row(row_id, row) {
+                if let Some(item) = Self::parse_item_row(row_id, row) {
                     items.push(item);
                 }
             }
         }
         items
+    }
+
+    fn parse_item_row(row_id: u32, row: &Row) -> Option<GameItem> {
+        // Item 表列索引 (基于 EXDSchema)
+        const COL_NAME: usize = 0;
+        const COL_ICON: usize = 10;
+        const COL_FILTER_GROUP: usize = 13;
+        const COL_ADDITIONAL_DATA: usize = 14;
+        const COL_ITEM_UI_CATEGORY: usize = 15;
+        const COL_EQUIP_SLOT_CATEGORY: usize = 17;
+        const COL_MODEL_MAIN: usize = 47;
+
+        let name = match row.columns.get(COL_NAME)? {
+            Field::String(s) => {
+                if s.is_empty() {
+                    return None;
+                }
+                s.clone()
+            }
+            _ => return None,
+        };
+
+        let icon_id = match row.columns.get(COL_ICON) {
+            Some(Field::UInt16(v)) => *v as u32,
+            Some(Field::UInt32(v)) => *v,
+            _ => 0,
+        };
+
+        let filter_group = match row.columns.get(COL_FILTER_GROUP) {
+            Some(Field::UInt8(v)) => *v,
+            _ => 0,
+        };
+
+        let additional_data = match row.columns.get(COL_ADDITIONAL_DATA) {
+            Some(Field::UInt32(v)) => *v,
+            Some(Field::UInt16(v)) => *v as u32,
+            _ => 0,
+        };
+
+        let item_ui_category = match row.columns.get(COL_ITEM_UI_CATEGORY) {
+            Some(Field::UInt8(v)) => *v,
+            _ => 0,
+        };
+
+        let equip_slot_category = match row.columns.get(COL_EQUIP_SLOT_CATEGORY) {
+            Some(Field::UInt8(v)) => *v,
+            _ => 0,
+        };
+
+        let model_main = match row.columns.get(COL_MODEL_MAIN) {
+            Some(Field::UInt64(v)) => *v,
+            _ => 0,
+        };
+
+        Some(GameItem {
+            row_id,
+            name,
+            icon_id,
+            filter_group,
+            item_ui_category,
+            equip_slot_category,
+            model_main,
+            additional_data,
+        })
+    }
+
+    /// 加载 HousingExterior 表的 SGB 路径映射
+    /// 返回 HousingExterior row_id -> SGB 路径列表
+    pub fn load_housing_sgb_paths(&self) -> std::collections::HashMap<u32, Vec<String>> {
+        let mut physis = self.physis.borrow_mut();
+
+        let ext_exh = match physis.read_excel_sheet_header("HousingExterior") {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("无法加载 HousingExterior 表头: {}", e);
+                return std::collections::HashMap::new();
+            }
+        };
+        let ext_sheet = match physis.read_excel_sheet(&ext_exh, "HousingExterior", Language::None) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("无法加载 HousingExterior 表: {}", e);
+                return std::collections::HashMap::new();
+            }
+        };
+
+        let mut sgb_paths: std::collections::HashMap<u32, Vec<String>> =
+            std::collections::HashMap::new();
+        for page in &ext_sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                let mut paths = Vec::new();
+                for col in &row.columns {
+                    if let Field::String(s) = col {
+                        if !s.is_empty() && s.ends_with(".sgb") {
+                            paths.push(s.clone());
+                        }
+                    }
+                }
+                if !paths.is_empty() {
+                    sgb_paths.insert(row_id, paths);
+                }
+            }
+        }
+        println!("HousingExterior 表: {} 条有效记录", sgb_paths.len());
+        sgb_paths
     }
 
     pub fn load_stain_list(&self) -> Vec<StainEntry> {
@@ -221,57 +327,6 @@ impl GameData {
         })
     }
 
-    fn parse_equipment_row(row_id: u32, row: &Row) -> Option<EquipmentItem> {
-        const COL_EQUIP_SLOT_CATEGORY: usize = 17;
-        const COL_MODEL_MAIN: usize = 47;
-        const COL_NAME: usize = 0;
-        const COL_ICON: usize = 10;
-
-        let equip_cat = match row.columns.get(COL_EQUIP_SLOT_CATEGORY)? {
-            Field::UInt8(v) => *v,
-            _ => return None,
-        };
-
-        let slot = EquipSlot::from_category(equip_cat)?;
-
-        let model_main = match row.columns.get(COL_MODEL_MAIN)? {
-            Field::UInt64(v) => *v,
-            _ => return None,
-        };
-
-        if model_main == 0 {
-            return None;
-        }
-
-        let set_id = (model_main & 0xFFFF) as u16;
-        let variant_id = ((model_main >> 16) & 0xFFFF) as u16;
-
-        let name = match row.columns.get(COL_NAME)? {
-            Field::String(s) => {
-                if s.is_empty() {
-                    return None;
-                }
-                s.clone()
-            }
-            _ => return None,
-        };
-
-        let icon_id = match row.columns.get(COL_ICON) {
-            Some(Field::UInt16(v)) => *v as u32,
-            Some(Field::UInt32(v)) => *v,
-            _ => 0,
-        };
-
-        Some(EquipmentItem {
-            row_id,
-            name,
-            slot,
-            set_id,
-            variant_id,
-            icon_id,
-        })
-    }
-
     pub fn load_icon(&self, icon_id: u32) -> Option<TextureData> {
         if icon_id == 0 {
             return None;
@@ -285,145 +340,5 @@ impl GameData {
 
         let fallback_path = format!("ui/icon/{:06}/{:06}.tex", high, icon_id);
         self.parsed_tex(&fallback_path)
-    }
-
-    /// 加载房屋外装列表
-    /// 从 HousingExterior 表获取 SGB 路径，从 Item 表获取名称和图标
-    pub fn load_housing_exterior_list(&self) -> Vec<HousingExteriorItem> {
-        let mut physis = self.physis.borrow_mut();
-
-        // 读取 HousingExterior 表获取 SGB 路径
-        let ext_exh = match physis.read_excel_sheet_header("HousingExterior") {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("无法加载 HousingExterior 表头: {}", e);
-                return Vec::new();
-            }
-        };
-        let ext_sheet = match physis.read_excel_sheet(&ext_exh, "HousingExterior", Language::None) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("无法加载 HousingExterior 表: {}", e);
-                return Vec::new();
-            }
-        };
-
-        // 构建 HousingExterior row_id -> SGB 路径列表 映射
-        let mut ext_sgb_paths: std::collections::HashMap<u32, Vec<String>> =
-            std::collections::HashMap::new();
-        for page in &ext_sheet.pages {
-            for (row_id, row) in page.into_iter().flatten_subrows() {
-                let mut paths = Vec::new();
-                for col in &row.columns {
-                    if let Field::String(s) = col {
-                        if !s.is_empty() && s.ends_with(".sgb") {
-                            paths.push(s.clone());
-                        }
-                    }
-                }
-                if !paths.is_empty() {
-                    ext_sgb_paths.insert(row_id, paths);
-                }
-            }
-        }
-        println!("HousingExterior 表: {} 条有效记录", ext_sgb_paths.len());
-
-        // 读取 Item 表，筛选房屋外装物品
-        let item_exh = match physis.read_excel_sheet_header("Item") {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("无法加载 Item 表头: {}", e);
-                return Vec::new();
-            }
-        };
-        let item_sheet =
-            match physis.read_excel_sheet(&item_exh, "Item", Language::ChineseSimplified) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("无法加载 Item 表: {}", e);
-                    return Vec::new();
-                }
-            };
-
-        let mut items = Vec::new();
-        for page in &item_sheet.pages {
-            for (row_id, row) in page.into_iter().flatten_subrows() {
-                if let Some(item) = Self::parse_housing_exterior_row(row_id, row, &ext_sgb_paths) {
-                    if items.len() < 5 {
-                        println!(
-                            "  外装物品: {} [{}] sgb={}",
-                            item.name,
-                            item.part_type.display_name(),
-                            item.sgb_paths.first().unwrap_or(&String::new()),
-                        );
-                    }
-                    items.push(item);
-                }
-            }
-        }
-        println!("房屋外装物品: {} 件", items.len());
-        items
-    }
-
-    fn parse_housing_exterior_row(
-        row_id: u32,
-        row: &Row,
-        ext_sgb_paths: &std::collections::HashMap<u32, Vec<String>>,
-    ) -> Option<HousingExteriorItem> {
-        const COL_NAME: usize = 0;
-        const COL_ICON: usize = 10;
-        const COL_FILTER_GROUP: usize = 13;
-        const COL_ADDITIONAL_DATA: usize = 14;
-        const COL_ITEM_UI_CATEGORY: usize = 15;
-
-        // 检查 FilterGroup == 14 (房屋物品)
-        let filter_group = match row.columns.get(COL_FILTER_GROUP) {
-            Some(Field::UInt8(v)) => *v,
-            _ => return None,
-        };
-        if filter_group != 14 {
-            return None;
-        }
-
-        // 检查 ItemUICategory 是否为外装类型
-        let ui_cat = match row.columns.get(COL_ITEM_UI_CATEGORY) {
-            Some(Field::UInt8(v)) => *v,
-            _ => return None,
-        };
-        let part_type = ExteriorPartType::from_ui_category(ui_cat)?;
-
-        // 获取 AdditionalData (链接到 HousingExterior 行)
-        let additional_data = match row.columns.get(COL_ADDITIONAL_DATA) {
-            Some(Field::UInt32(v)) => *v,
-            Some(Field::UInt16(v)) => *v as u32,
-            _ => return None,
-        };
-
-        // 从 HousingExterior 表获取 SGB 路径
-        let sgb_paths = ext_sgb_paths.get(&additional_data)?.clone();
-
-        let name = match row.columns.get(COL_NAME)? {
-            Field::String(s) => {
-                if s.is_empty() {
-                    return None;
-                }
-                s.clone()
-            }
-            _ => return None,
-        };
-
-        let icon_id = match row.columns.get(COL_ICON) {
-            Some(Field::UInt16(v)) => *v as u32,
-            Some(Field::UInt32(v)) => *v,
-            _ => 0,
-        };
-
-        Some(HousingExteriorItem {
-            row_id,
-            name,
-            icon_id,
-            part_type,
-            sgb_paths,
-        })
     }
 }

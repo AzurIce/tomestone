@@ -9,11 +9,12 @@ impl App {
     pub fn show_glamour_manager_page(&mut self, ctx: &egui::Context, gs: &mut GameState) {
         if let Some(mut editor) = self.glamour_editor.take() {
             let mut app_ctx = AppContext {
-                items: &gs.items,
+                items: &gs.all_items,
                 item_id_map: &gs.item_id_map,
                 stains: &gs.stains,
                 stm: gs.stm.as_ref(),
                 game: &gs.game,
+                equipment_indices: &gs.equipment_indices,
                 equipment_sets: &gs.equipment_sets,
                 set_id_to_set_idx: &gs.set_id_to_set_idx,
                 icon_cache: &mut self.icon_cache,
@@ -77,7 +78,7 @@ impl App {
                     (
                         glamour_set.name.clone(),
                         glamour_set.slot_count(),
-                        glamour_slot_summary(&gs.items, &gs.item_id_map, glamour_set),
+                        glamour_slot_summary(&gs.all_items, &gs.item_id_map, glamour_set),
                     )
                 })
                 .collect();

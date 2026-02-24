@@ -66,33 +66,21 @@ pub const EXTERIOR_PART_TYPES: [ExteriorPartType; 8] = [
     ExteriorPartType::Fence,
 ];
 
-// ── 房屋外装物品 ──
-
-#[derive(Debug, Clone)]
-pub struct HousingExteriorItem {
-    pub row_id: u32,
-    pub name: String,
-    pub icon_id: u32,
-    pub part_type: ExteriorPartType,
-    /// SGB 文件路径列表（不同尺寸的房屋对应不同 SGB）
-    pub sgb_paths: Vec<String>,
-}
-
 // ── 视图模式 & 排序 ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
-    /// 列表视图: 按套装分组折叠
+    /// 列表视图: 文字行列表（带小图标）
     List,
-    /// 表格视图: 扁平列表，带图标，虚拟滚动
-    Table,
+    /// 图标视图: 图标网格，横向排列自动换行，可调大小
+    Grid,
 }
 
 impl ViewMode {
     pub fn label(&self) -> &'static str {
         match self {
             Self::List => "列表",
-            Self::Table => "表格",
+            Self::Grid => "图标",
         }
     }
 }
@@ -208,66 +196,124 @@ pub const ACCESSORY_SLOTS: [EquipSlot; 4] = [
     EquipSlot::Ring,
 ];
 
-// ── 装备物品 ──
+// ── 统一物品 ──
 
+/// 来自 Item EXD 表的统一物品结构
+/// 包含所有物品类型（装备、消耗品、素材、房屋物品等）的公共字段
 #[derive(Debug, Clone)]
-pub struct EquipmentItem {
+pub struct GameItem {
     pub row_id: u32,
     pub name: String,
-    pub slot: EquipSlot,
-    pub set_id: u16,
-    pub variant_id: u16,
     pub icon_id: u32,
+    /// 物品大类 (1=物理武器, 4=防具, 12=素材, 14=房屋, 15=染料, ...)
+    pub filter_group: u8,
+    /// UI 分类 (链接到 ItemUICategory 表)
+    pub item_ui_category: u8,
+    /// 装备槽位分类 (链接到 EquipSlotCategory 表, 0=非装备)
+    pub equip_slot_category: u8,
+    /// 主模型数据 (低16位=set_id, 次16位=variant_id)
+    pub model_main: u64,
+    /// 附加数据 (FilterGroup=14 时链接到 HousingExterior 等)
+    pub additional_data: u32,
 }
 
-impl EquipmentItem {
-    pub fn model_path(&self) -> String {
-        if self.slot.is_accessory() {
+impl GameItem {
+    /// 获取装备槽位 (仅装备类物品有效)
+    pub fn equip_slot(&self) -> Option<EquipSlot> {
+        EquipSlot::from_category(self.equip_slot_category)
+    }
+
+    /// 是否为装备类物品
+    pub fn is_equipment(&self) -> bool {
+        self.equip_slot().is_some() && self.model_main != 0
+    }
+
+    /// 装备 set_id (从 model_main 提取)
+    pub fn set_id(&self) -> u16 {
+        (self.model_main & 0xFFFF) as u16
+    }
+
+    /// 装备 variant_id (从 model_main 提取)
+    pub fn variant_id(&self) -> u16 {
+        ((self.model_main >> 16) & 0xFFFF) as u16
+    }
+
+    /// 是否为饰品
+    pub fn is_accessory(&self) -> bool {
+        self.equip_slot().map_or(false, |s| s.is_accessory())
+    }
+
+    /// 获取默认模型路径 (装备类物品)
+    pub fn model_path(&self) -> Option<String> {
+        let slot = self.equip_slot()?;
+        if self.model_main == 0 {
+            return None;
+        }
+        let set_id = self.set_id();
+        Some(if slot.is_accessory() {
             format!(
                 "chara/accessory/a{:04}/model/c0101a{:04}_{}.mdl",
-                self.set_id,
-                self.set_id,
-                self.slot.slot_abbr()
+                set_id,
+                set_id,
+                slot.slot_abbr()
             )
         } else {
             format!(
                 "chara/equipment/e{:04}/model/c0201e{:04}_{}.mdl",
-                self.set_id,
-                self.set_id,
-                self.slot.slot_abbr()
+                set_id,
+                set_id,
+                slot.slot_abbr()
             )
-        }
+        })
     }
 
-    pub fn model_path_for_race(&self, race_code: &str) -> String {
-        if self.slot.is_accessory() {
+    /// 获取指定种族的模型路径 (装备类物品)
+    pub fn model_path_for_race(&self, race_code: &str) -> Option<String> {
+        let slot = self.equip_slot()?;
+        if self.model_main == 0 {
+            return None;
+        }
+        let set_id = self.set_id();
+        Some(if slot.is_accessory() {
             format!(
                 "chara/accessory/a{:04}/model/{}a{:04}_{}.mdl",
-                self.set_id,
+                set_id,
                 race_code,
-                self.set_id,
-                self.slot.slot_abbr()
+                set_id,
+                slot.slot_abbr()
             )
         } else {
             format!(
                 "chara/equipment/e{:04}/model/{}e{:04}_{}.mdl",
-                self.set_id,
+                set_id,
                 race_code,
-                self.set_id,
-                self.slot.slot_abbr()
+                set_id,
+                slot.slot_abbr()
             )
-        }
+        })
     }
 
+    /// 获取所有种族的模型路径列表 (装备类物品)
     pub fn model_paths(&self) -> Vec<String> {
         RACE_CODES
             .iter()
-            .map(|rc| self.model_path_for_race(rc))
+            .filter_map(|rc| self.model_path_for_race(rc))
             .collect()
     }
 
-    pub fn is_accessory(&self) -> bool {
-        self.slot.is_accessory()
+    /// 是否为房屋外装物品
+    pub fn is_housing_exterior(&self) -> bool {
+        self.filter_group == 14
+            && ExteriorPartType::from_ui_category(self.item_ui_category).is_some()
+    }
+
+    /// 获取房屋外装类型
+    pub fn exterior_part_type(&self) -> Option<ExteriorPartType> {
+        if self.filter_group == 14 {
+            ExteriorPartType::from_ui_category(self.item_ui_category)
+        } else {
+            None
+        }
     }
 }
 
@@ -281,6 +327,7 @@ pub const RACE_CODES: &[&str] = &[
 pub struct EquipmentSet {
     pub set_id: u16,
     pub display_name: String,
+    /// 在 all_items 中的下标
     pub item_indices: Vec<usize>,
     pub has_gear: bool,
     pub has_accessory: bool,
@@ -304,7 +351,7 @@ pub fn longest_common_prefix(strings: &[&str]) -> String {
     first[..len].trim_end().to_string()
 }
 
-pub fn derive_set_name(items: &[EquipmentItem], indices: &[usize]) -> String {
+pub fn derive_set_name(items: &[GameItem], indices: &[usize]) -> String {
     let names: Vec<&str> = indices.iter().map(|&i| items[i].name.as_str()).collect();
     let prefix = longest_common_prefix(&names);
     if prefix.is_empty() {
@@ -316,17 +363,22 @@ pub fn derive_set_name(items: &[EquipmentItem], indices: &[usize]) -> String {
     prefix
 }
 
-pub fn build_equipment_sets(items: &[EquipmentItem]) -> Vec<EquipmentSet> {
+/// 从装备物品索引列表构建套装分组
+pub fn build_equipment_sets(
+    all_items: &[GameItem],
+    equipment_indices: &[usize],
+) -> Vec<EquipmentSet> {
     let mut by_set: BTreeMap<u16, Vec<usize>> = BTreeMap::new();
-    for (i, item) in items.iter().enumerate() {
-        by_set.entry(item.set_id).or_default().push(i);
+    for &idx in equipment_indices {
+        let item = &all_items[idx];
+        by_set.entry(item.set_id()).or_default().push(idx);
     }
     by_set
         .into_iter()
         .map(|(set_id, item_indices)| {
-            let display_name = derive_set_name(items, &item_indices);
-            let has_gear = item_indices.iter().any(|&i| !items[i].is_accessory());
-            let has_accessory = item_indices.iter().any(|&i| items[i].is_accessory());
+            let display_name = derive_set_name(all_items, &item_indices);
+            let has_gear = item_indices.iter().any(|&i| !all_items[i].is_accessory());
+            let has_accessory = item_indices.iter().any(|&i| all_items[i].is_accessory());
             EquipmentSet {
                 set_id,
                 display_name,

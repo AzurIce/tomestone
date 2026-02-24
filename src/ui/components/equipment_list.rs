@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eframe::egui;
 
-use crate::domain::{EquipSlot, EquipmentItem, EquipmentSet, SortOrder, ViewMode};
+use crate::domain::{EquipSlot, EquipmentSet, GameItem, SortOrder, ViewMode};
 use crate::game::GameData;
 
 /// 套装分组装备列表的共享状态
@@ -11,6 +11,8 @@ pub struct EquipmentListState {
     pub sort_order: SortOrder,
     pub expanded_sets: HashSet<u16>,
     pub view_mode: ViewMode,
+    /// 图标视图中的图标大小 (像素)
+    pub icon_size: f32,
 }
 
 impl EquipmentListState {
@@ -20,12 +22,14 @@ impl EquipmentListState {
             sort_order: SortOrder::ByName,
             expanded_sets: HashSet::new(),
             view_mode: ViewMode::List,
+            icon_size: 48.0,
         }
     }
 }
 
 /// 点击物品时返回的信息
 pub struct ItemClicked {
+    /// 在 all_items 中的下标
     pub global_idx: usize,
     pub item_id: u32,
     pub slot: EquipSlot,
@@ -112,6 +116,8 @@ fn show_item_row(
 impl EquipmentListState {
     /// 显示套装分组的装备列表，返回被点击的物品信息
     ///
+    /// - `all_items`: 全部物品列表
+    /// - `equipment_indices`: 装备物品在 all_items 中的下标
     /// - `slot_filter`: 可选槽位筛选
     /// - `highlight`: 高亮配置
     /// - `id_salt`: egui ID 盐值，避免多实例冲突
@@ -121,7 +127,8 @@ impl EquipmentListState {
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
-        items: &[EquipmentItem],
+        all_items: &[GameItem],
+        equipment_indices: &[usize],
         equipment_sets: &[EquipmentSet],
         set_id_to_set_idx: &HashMap<u16, usize>,
         slot_filter: Option<EquipSlot>,
@@ -164,19 +171,28 @@ impl EquipmentListState {
                 self.view_mode = ViewMode::List;
             }
             if ui
-                .selectable_label(self.view_mode == ViewMode::Table, ViewMode::Table.label())
+                .selectable_label(self.view_mode == ViewMode::Grid, ViewMode::Grid.label())
                 .clicked()
             {
-                self.view_mode = ViewMode::Table;
+                self.view_mode = ViewMode::Grid;
             }
         });
+
+        // 图标大小滑块 (仅图标视图)
+        if self.view_mode == ViewMode::Grid {
+            ui.horizontal(|ui| {
+                ui.label("图标:");
+                ui.add(egui::Slider::new(&mut self.icon_size, 32.0..=128.0).suffix("px"));
+            });
+        }
 
         ui.separator();
 
         match self.view_mode {
             ViewMode::List => self.show_list_view(
                 ui,
-                items,
+                all_items,
+                equipment_indices,
                 equipment_sets,
                 set_id_to_set_idx,
                 slot_filter,
@@ -186,9 +202,10 @@ impl EquipmentListState {
                 ctx,
                 game,
             ),
-            ViewMode::Table => self.show_table_view(
+            ViewMode::Grid => self.show_grid_view(
                 ui,
-                items,
+                all_items,
+                equipment_indices,
                 slot_filter,
                 highlight,
                 id_salt,
@@ -203,7 +220,8 @@ impl EquipmentListState {
     fn show_list_view(
         &mut self,
         ui: &mut egui::Ui,
-        items: &[EquipmentItem],
+        all_items: &[GameItem],
+        equipment_indices: &[usize],
         equipment_sets: &[EquipmentSet],
         set_id_to_set_idx: &HashMap<u16, usize>,
         slot_filter: Option<EquipSlot>,
@@ -215,20 +233,24 @@ impl EquipmentListState {
     ) -> Option<ItemClicked> {
         // 构建套装分组
         let search_lower = self.search.to_lowercase();
-        let mut set_groups: Vec<(u16, String, bool, bool, Vec<(usize, &EquipmentItem)>)> =
-            Vec::new();
+        let mut set_groups: Vec<(u16, String, bool, bool, Vec<(usize, &GameItem)>)> = Vec::new();
         {
-            let mut by_set: BTreeMap<u16, Vec<(usize, &EquipmentItem)>> = BTreeMap::new();
-            for (idx, item) in items.iter().enumerate() {
+            let mut by_set: BTreeMap<u16, Vec<(usize, &GameItem)>> = BTreeMap::new();
+            for &idx in equipment_indices {
+                let item = &all_items[idx];
+                let slot = match item.equip_slot() {
+                    Some(s) => s,
+                    None => continue,
+                };
                 if let Some(sf) = slot_filter {
-                    if item.slot != sf {
+                    if slot != sf {
                         continue;
                     }
                 }
                 if !search_lower.is_empty() && !item.name.to_lowercase().contains(&search_lower) {
                     continue;
                 }
-                by_set.entry(item.set_id).or_default().push((idx, item));
+                by_set.entry(item.set_id()).or_default().push((idx, item));
             }
 
             for (set_id, items_in_set) in by_set {
@@ -263,8 +285,10 @@ impl EquipmentListState {
         // 渲染列表
         let mut clicked: Option<ItemClicked> = None;
 
+        let scroll_height = ui.available_height();
         egui::ScrollArea::vertical()
             .id_salt(format!("{}_scroll", id_salt))
+            .max_height(scroll_height)
             .show(ui, |ui| {
                 for (set_id, group_name, has_gear, has_acc, items_in_set) in &set_groups {
                     let expanded = self.expanded_sets.contains(set_id);
@@ -303,9 +327,13 @@ impl EquipmentListState {
 
                     if expanded {
                         for (global_idx, item) in items_in_set {
+                            let slot = match item.equip_slot() {
+                                Some(s) => s,
+                                None => continue,
+                            };
                             let is_highlighted = highlight.highlighted_ids.contains(&item.row_id);
                             let is_preview = highlight.preview_id == Some(item.row_id);
-                            let label_text = format!("[{}] {}", item.slot.slot_abbr(), item.name);
+                            let label_text = format!("[{}] {}", slot.slot_abbr(), item.name);
                             let rich = if is_preview {
                                 egui::RichText::new(&label_text)
                                     .color(egui::Color32::from_rgb(100, 200, 255))
@@ -324,7 +352,7 @@ impl EquipmentListState {
                                 clicked = Some(ItemClicked {
                                     global_idx: *global_idx,
                                     item_id: item.row_id,
-                                    slot: item.slot,
+                                    slot,
                                 });
                             }
                         }
@@ -335,11 +363,12 @@ impl EquipmentListState {
         clicked
     }
 
-    /// 表格视图: 扁平列表，带图标，虚拟滚动
-    fn show_table_view(
+    /// 图标网格视图: 图标横向排列自动换行，可调大小
+    fn show_grid_view(
         &mut self,
         ui: &mut egui::Ui,
-        items: &[EquipmentItem],
+        all_items: &[GameItem],
+        equipment_indices: &[usize],
         slot_filter: Option<EquipSlot>,
         highlight: &HighlightConfig<'_>,
         id_salt: &str,
@@ -348,57 +377,126 @@ impl EquipmentListState {
         game: &GameData,
     ) -> Option<ItemClicked> {
         let search_lower = self.search.to_lowercase();
-        let filtered: Vec<(usize, &EquipmentItem)> = items
+        let filtered: Vec<(usize, &GameItem)> = equipment_indices
             .iter()
-            .enumerate()
-            .filter(|(_, item)| {
+            .filter_map(|&idx| {
+                let item = &all_items[idx];
+                let slot = item.equip_slot()?;
                 if let Some(sf) = slot_filter {
-                    if item.slot != sf {
-                        return false;
+                    if slot != sf {
+                        return None;
                     }
                 }
                 if !search_lower.is_empty() && !item.name.to_lowercase().contains(&search_lower) {
-                    return false;
+                    return None;
                 }
-                true
+                Some((idx, item))
             })
             .collect();
 
         ui.label(format!("{} 件", filtered.len()));
 
-        let row_height = 26.0;
-        let total_rows = filtered.len();
+        let available_width = ui.available_width();
+        let icon_size = self.icon_size;
+        let cell_padding = 4.0;
+        let text_height = 14.0;
+        let text_lines = 2;
+        let cell_width = (icon_size + cell_padding * 2.0).min(available_width);
+        let cell_height = icon_size + cell_padding * 2.0 + text_height * text_lines as f32;
+        let cols = ((available_width / cell_width).floor() as usize).max(1);
+        // 实际每格宽度: 均分可用宽度
+        let actual_cell_width = available_width / cols as f32;
+        let total_rows = (filtered.len() + cols - 1) / cols;
+
         let mut clicked: Option<ItemClicked> = None;
 
         egui::ScrollArea::vertical()
-            .id_salt(format!("{}_table_scroll", id_salt))
-            .show_rows(ui, row_height, total_rows, |ui, row_range| {
-                for i in row_range {
-                    let (idx, item) = &filtered[i];
-                    let is_highlighted = highlight.highlighted_ids.contains(&item.row_id);
-                    let is_preview = highlight.preview_id == Some(item.row_id);
-                    let label_text = format!("[{}] {}", item.slot.slot_abbr(), item.name);
-                    let rich = if is_preview {
-                        egui::RichText::new(&label_text)
-                            .color(egui::Color32::from_rgb(100, 200, 255))
-                    } else {
-                        egui::RichText::new(&label_text)
-                    };
-                    if show_item_row(
-                        ui,
-                        icon_cache,
-                        ctx,
-                        game,
-                        item.icon_id,
-                        is_highlighted || is_preview,
-                        rich,
-                    ) {
-                        clicked = Some(ItemClicked {
-                            global_idx: *idx,
-                            item_id: item.row_id,
-                            slot: item.slot,
-                        });
-                    }
+            .id_salt(format!("{}_grid_scroll", id_salt))
+            .show_rows(ui, cell_height, total_rows, |ui, row_range| {
+                for row_idx in row_range {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let start = row_idx * cols;
+                        let end = (start + cols).min(filtered.len());
+                        for i in start..end {
+                            let (idx, item) = &filtered[i];
+                            let is_highlighted = highlight.highlighted_ids.contains(&item.row_id);
+                            let is_preview = highlight.preview_id == Some(item.row_id);
+                            let selected = is_highlighted || is_preview;
+
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(actual_cell_width, cell_height),
+                                egui::Sense::click(),
+                            );
+
+                            // 背景高亮
+                            if selected || response.hovered() {
+                                let bg_color = if selected {
+                                    ui.visuals().selection.bg_fill
+                                } else {
+                                    ui.visuals().widgets.hovered.bg_fill
+                                };
+                                ui.painter().rect_filled(rect, 2.0, bg_color);
+                            }
+
+                            // 图标 (居中在上半部分)
+                            let icon_top = rect.top() + cell_padding;
+                            let icon_center_x = rect.center().x;
+                            let icon_rect = egui::Rect::from_center_size(
+                                egui::pos2(icon_center_x, icon_top + icon_size / 2.0),
+                                egui::vec2(icon_size, icon_size),
+                            );
+                            if let Some(icon) =
+                                get_or_load_icon(icon_cache, ctx, game, item.icon_id)
+                            {
+                                ui.painter().image(
+                                    icon.id(),
+                                    icon_rect,
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(1.0, 1.0),
+                                    ),
+                                    egui::Color32::WHITE,
+                                );
+                            }
+
+                            // 文字名称 (图标下方，居中，最多两行，裁剪)
+                            let text_top = icon_top + icon_size + cell_padding;
+                            let text_rect = egui::Rect::from_min_size(
+                                egui::pos2(rect.left() + 2.0, text_top),
+                                egui::vec2(
+                                    actual_cell_width - 4.0,
+                                    text_height * text_lines as f32,
+                                ),
+                            );
+                            let text_color = if is_preview {
+                                egui::Color32::from_rgb(100, 200, 255)
+                            } else {
+                                ui.visuals().text_color()
+                            };
+                            let clipped = ui.painter().with_clip_rect(rect);
+                            clipped.text(
+                                text_rect.center_top(),
+                                egui::Align2::CENTER_TOP,
+                                &item.name,
+                                egui::FontId::proportional(11.0),
+                                text_color,
+                            );
+
+                            // tooltip
+                            response.clone().on_hover_text(&item.name);
+
+                            if response.clicked() {
+                                if let Some(slot) = item.equip_slot() {
+                                    clicked = Some(ItemClicked {
+                                        global_idx: *idx,
+                                        item_id: item.row_id,
+                                        slot,
+                                    });
+                                }
+                            }
+                        }
+                    });
                 }
             });
 

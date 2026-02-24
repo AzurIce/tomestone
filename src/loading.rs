@@ -3,24 +3,35 @@ use std::path::PathBuf;
 
 use physis::stm::StainingTemplate;
 
-use crate::domain::{
-    build_equipment_sets, EquipmentItem, EquipmentSet, HousingExteriorItem, StainEntry, ALL_SLOTS,
-};
+use crate::domain::{build_equipment_sets, EquipmentSet, GameItem, StainEntry, ALL_SLOTS};
 use crate::game::GameData;
 use crate::glamour;
 use crate::ui::pages::resource::ResourceBrowserState;
 
 pub struct GameState {
     pub game: GameData,
-    pub items: Vec<EquipmentItem>,
-    pub stains: Vec<StainEntry>,
-    pub stm: Option<StainingTemplate>,
+    /// 全部物品 (统一模型)
+    pub all_items: Vec<GameItem>,
+    /// row_id -> all_items 下标
+    pub item_id_map: HashMap<u32, usize>,
+
+    // ── 装备视图索引 ──
+    /// 装备类物品在 all_items 中的下标
+    pub equipment_indices: Vec<usize>,
     pub equipment_sets: Vec<EquipmentSet>,
     pub set_id_to_set_idx: HashMap<u16, usize>,
-    pub item_id_map: HashMap<u32, usize>,
+
+    // ── 房屋外装视图索引 ──
+    /// 房屋外装物品在 all_items 中的下标
+    pub housing_ext_indices: Vec<usize>,
+    /// HousingExterior additional_data -> SGB 路径列表
+    pub housing_sgb_paths: HashMap<u32, Vec<String>>,
+
+    // ── 其他数据 ──
+    pub stains: Vec<StainEntry>,
+    pub stm: Option<StainingTemplate>,
     pub glamour_sets: Vec<glamour::GlamourSet>,
     pub resource_browser: ResourceBrowserState,
-    pub housing_exteriors: Vec<HousingExteriorItem>,
 }
 
 pub enum LoadProgress {
@@ -31,11 +42,11 @@ pub enum LoadProgress {
 
 pub struct LoadedData {
     pub game: GameData,
-    pub items: Vec<EquipmentItem>,
+    pub all_items: Vec<GameItem>,
     pub stains: Vec<StainEntry>,
     pub stm: Option<StainingTemplate>,
     pub all_table_names: Vec<String>,
-    pub housing_exteriors: Vec<HousingExteriorItem>,
+    pub housing_sgb_paths: HashMap<u32, Vec<String>>,
 }
 
 pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<LoadProgress>) {
@@ -47,8 +58,8 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let _ = tx.send(LoadProgress::Status("正在初始化游戏数据...".to_string()));
     let game = GameData::new(&install_dir);
 
-    let _ = tx.send(LoadProgress::Status("正在加载装备列表...".to_string()));
-    let items = game.load_equipment_list();
+    let _ = tx.send(LoadProgress::Status("正在加载物品列表...".to_string()));
+    let all_items = game.load_all_items();
 
     let _ = tx.send(LoadProgress::Status("正在加载染料列表...".to_string()));
     let stains = game.load_stain_list();
@@ -60,21 +71,21 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let mut all_table_names = game.get_all_sheet_names();
     all_table_names.sort();
 
-    let _ = tx.send(LoadProgress::Status("正在加载房屋外装列表...".to_string()));
-    let housing_exteriors = game.load_housing_exterior_list();
+    let _ = tx.send(LoadProgress::Status("正在加载房屋外装数据...".to_string()));
+    let housing_sgb_paths = game.load_housing_sgb_paths();
 
     let _ = tx.send(LoadProgress::Done(Box::new(LoadedData {
         game,
-        items,
+        all_items,
         stains,
         stm,
         all_table_names,
-        housing_exteriors,
+        housing_sgb_paths,
     })));
 }
 
 pub fn glamour_slot_summary(
-    items: &[EquipmentItem],
+    all_items: &[GameItem],
     item_id_map: &HashMap<u32, usize>,
     gs: &glamour::GlamourSet,
 ) -> String {
@@ -83,7 +94,7 @@ pub fn glamour_slot_summary(
         if let Some(gslot) = gs.get_slot(*slot) {
             let name = item_id_map
                 .get(&gslot.item_id)
-                .and_then(|&idx| items.get(idx))
+                .and_then(|&idx| all_items.get(idx))
                 .map(|item| item.name.as_str())
                 .unwrap_or("???");
             parts.push(format!("[{}]{}", slot.slot_abbr(), name));
@@ -94,32 +105,65 @@ pub fn glamour_slot_summary(
 
 impl GameState {
     pub fn from_loaded_data(data: LoadedData) -> Self {
-        let equipment_sets = build_equipment_sets(&data.items);
+        // 构建 item_id_map
+        let item_id_map: HashMap<u32, usize> = data
+            .all_items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (item.row_id, i))
+            .collect();
+
+        // 构建装备视图索引
+        let equipment_indices: Vec<usize> = data
+            .all_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.is_equipment())
+            .map(|(i, _)| i)
+            .collect();
+
+        let equipment_sets = build_equipment_sets(&data.all_items, &equipment_indices);
         let set_id_to_set_idx = equipment_sets
             .iter()
             .enumerate()
             .map(|(i, s)| (s.set_id, i))
             .collect();
-        let item_id_map = data
-            .items
+
+        // 构建房屋外装视图索引
+        let housing_ext_indices: Vec<usize> = data
+            .all_items
             .iter()
             .enumerate()
-            .map(|(i, item)| (item.row_id, i))
+            .filter(|(_, item)| {
+                item.is_housing_exterior()
+                    && data.housing_sgb_paths.contains_key(&item.additional_data)
+            })
+            .map(|(i, _)| i)
             .collect();
+
         let glamour_sets = glamour::load_all_glamour_sets();
         let resource_browser = ResourceBrowserState::new(data.all_table_names);
 
+        println!(
+            "物品总数: {}, 装备: {}, 房屋外装: {}",
+            data.all_items.len(),
+            equipment_indices.len(),
+            housing_ext_indices.len()
+        );
+
         Self {
             game: data.game,
-            items: data.items,
-            stains: data.stains,
-            stm: data.stm,
+            all_items: data.all_items,
+            item_id_map,
+            equipment_indices,
             equipment_sets,
             set_id_to_set_idx,
-            item_id_map,
+            housing_ext_indices,
+            housing_sgb_paths: data.housing_sgb_paths,
+            stains: data.stains,
+            stm: data.stm,
             glamour_sets,
             resource_browser,
-            housing_exteriors: data.housing_exteriors,
         }
     }
 }

@@ -62,6 +62,14 @@ pub struct App {
     pub housing_search: String,
     pub housing_view_mode: ViewMode,
     pub housing_icon_size: f32,
+    // 合成检索状态
+    pub crafting_search: String,
+    pub crafting_selected_craft_type: Option<u8>,
+    pub crafting_selected_item: Option<usize>,
+    pub crafting_selected_node_item: Option<u32>,
+    pub crafting_selected_node_amount: u32,
+    pub crafting_view_mode: ViewMode,
+    pub crafting_icon_size: f32,
 }
 
 impl App {
@@ -121,6 +129,13 @@ impl App {
             housing_search: String::new(),
             housing_view_mode: ViewMode::Grid,
             housing_icon_size: 48.0,
+            crafting_search: String::new(),
+            crafting_selected_craft_type: None,
+            crafting_selected_item: None,
+            crafting_selected_node_item: None,
+            crafting_selected_node_amount: 0,
+            crafting_view_mode: ViewMode::List,
+            crafting_icon_size: 48.0,
         }
     }
 
@@ -253,6 +268,11 @@ impl App {
                 );
                 ui.selectable_value(
                     &mut self.current_page,
+                    crate::domain::AppPage::CraftingBrowser,
+                    "合成检索",
+                );
+                ui.selectable_value(
+                    &mut self.current_page,
                     crate::domain::AppPage::ResourceBrowser,
                     "EXD 浏览器",
                 );
@@ -282,6 +302,7 @@ impl App {
             crate::domain::AppPage::Browser => self.show_browser_page(ctx, gs),
             crate::domain::AppPage::GlamourManager => self.show_glamour_manager_page(ctx, gs),
             crate::domain::AppPage::HousingBrowser => self.show_housing_page(ctx, gs),
+            crate::domain::AppPage::CraftingBrowser => self.show_crafting_page(ctx, gs),
             crate::domain::AppPage::ResourceBrowser => gs.resource_browser.show(ctx, &gs.game),
             crate::domain::AppPage::Test => self.show_test_page(ctx),
         }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use physis::stm::StainingTemplate;
 
-use crate::domain::{build_equipment_sets, EquipmentSet, GameItem, StainEntry, ALL_SLOTS};
+use crate::domain::{build_equipment_sets, EquipmentSet, GameItem, Recipe, StainEntry, ALL_SLOTS};
 use crate::game::GameData;
 use crate::glamour;
 use crate::ui::pages::resource::ResourceBrowserState;
@@ -32,6 +32,14 @@ pub struct GameState {
     pub stm: Option<StainingTemplate>,
     pub glamour_sets: Vec<glamour::GlamourSet>,
     pub resource_browser: ResourceBrowserState,
+
+    // ── 合成数据 ──
+    pub recipes: Vec<Recipe>,
+    /// item_id -> 配方索引列表 (一个物品可能有多个配方，通常取第一个)
+    pub item_to_recipes: HashMap<u32, Vec<usize>>,
+    /// 可制作物品在 all_items 中的下标，按 craft_type 分组
+    /// craftable_by_type[craft_type] = Vec<(all_items下标, recipe下标)>
+    pub craftable_by_type: [Vec<(usize, usize)>; 8],
 }
 
 pub enum LoadProgress {
@@ -47,6 +55,7 @@ pub struct LoadedData {
     pub stm: Option<StainingTemplate>,
     pub all_table_names: Vec<String>,
     pub housing_sgb_paths: HashMap<u32, Vec<String>>,
+    pub recipes: Vec<Recipe>,
 }
 
 pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<LoadProgress>) {
@@ -74,6 +83,9 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let _ = tx.send(LoadProgress::Status("正在加载房屋外装数据...".to_string()));
     let housing_sgb_paths = game.load_housing_sgb_paths();
 
+    let _ = tx.send(LoadProgress::Status("正在加载配方数据...".to_string()));
+    let recipes = game.load_recipes();
+
     let _ = tx.send(LoadProgress::Done(Box::new(LoadedData {
         game,
         all_items,
@@ -81,6 +93,7 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
         stm,
         all_table_names,
         housing_sgb_paths,
+        recipes,
     })));
 }
 
@@ -144,11 +157,26 @@ impl GameState {
         let glamour_sets = glamour::load_all_glamour_sets();
         let resource_browser = ResourceBrowserState::new(data.all_table_names);
 
+        // 构建配方索引
+        let mut item_to_recipes: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut craftable_by_type: [Vec<(usize, usize)>; 8] = Default::default();
+        for (recipe_idx, recipe) in data.recipes.iter().enumerate() {
+            item_to_recipes
+                .entry(recipe.result_item_id)
+                .or_default()
+                .push(recipe_idx);
+            if let Some(&item_idx) = item_id_map.get(&recipe.result_item_id) {
+                let ct = (recipe.craft_type as usize).min(7);
+                craftable_by_type[ct].push((item_idx, recipe_idx));
+            }
+        }
+
         println!(
-            "物品总数: {}, 装备: {}, 房屋外装: {}",
+            "物品总数: {}, 装备: {}, 房屋外装: {}, 配方: {}",
             data.all_items.len(),
             equipment_indices.len(),
-            housing_ext_indices.len()
+            housing_ext_indices.len(),
+            data.recipes.len(),
         );
 
         Self {
@@ -164,6 +192,9 @@ impl GameState {
             stm: data.stm,
             glamour_sets,
             resource_browser,
+            recipes: data.recipes,
+            item_to_recipes,
+            craftable_by_type,
         }
     }
 }

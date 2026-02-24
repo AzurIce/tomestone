@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod crafting;
 pub mod glamour;
 pub mod housing;
 pub mod resource;

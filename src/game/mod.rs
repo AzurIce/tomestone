@@ -21,7 +21,7 @@ use physis::Language;
 
 use tomestone_render::TextureData;
 
-use crate::domain::{GameItem, StainEntry};
+use crate::domain::{GameItem, Recipe, StainEntry};
 
 pub struct ParsedMaterial {
     pub texture_paths: Vec<String>,
@@ -340,5 +340,121 @@ impl GameData {
 
         let fallback_path = format!("ui/icon/{:06}/{:06}.tex", high, icon_id);
         self.parsed_tex(&fallback_path)
+    }
+
+    /// 加载 Recipe EXD 表，返回配方列表
+    pub fn load_recipes(&self) -> Vec<Recipe> {
+        let mut physis = self.physis.borrow_mut();
+
+        let exh = match physis.read_excel_sheet_header("Recipe") {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("无法加载 Recipe 表头: {}", e);
+                return Vec::new();
+            }
+        };
+
+        // Recipe 表不含文本，使用 Language::None
+        let sheet = match physis.read_excel_sheet(&exh, "Recipe", Language::None) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("无法加载 Recipe 表: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let mut recipes = Vec::new();
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if let Some(recipe) = Self::parse_recipe_row(row_id, row) {
+                    recipes.push(recipe);
+                }
+            }
+        }
+        println!("Recipe 表: {} 条有效配方", recipes.len());
+        recipes
+    }
+
+    fn parse_recipe_row(row_id: u32, row: &Row) -> Option<Recipe> {
+        // Recipe 表实际列布局 (通过 debug dump 确认):
+        // col[0]: Number (Int32)
+        // col[1]: CraftType (Int32)
+        // col[2]: RecipeLevelTable (UInt16)
+        // col[3]: UInt16 (未知)
+        // col[4]: ItemResult (Int32, 产出物品 ID)
+        // col[5]: AmountResult (UInt8, 产出数量)
+        // col[6..21]: Ingredient[0..7] 交错排列, 每对 (Int32 item_id, UInt8 amount)
+        //   col[6]=Ing0_ID, col[7]=Ing0_Amt, col[8]=Ing1_ID, col[9]=Ing1_Amt, ...
+        const COL_CRAFT_TYPE: usize = 1;
+        const COL_RECIPE_LEVEL: usize = 2;
+        const COL_ITEM_RESULT: usize = 4;
+        const COL_AMOUNT_RESULT: usize = 5;
+        const COL_INGREDIENT_START: usize = 6; // 每对占 2 列, 共 8 对
+
+        fn read_i32_as_u32(row: &Row, col: usize) -> u32 {
+            match row.columns.get(col) {
+                Some(Field::Int32(v)) => {
+                    if *v > 0 {
+                        *v as u32
+                    } else {
+                        0
+                    }
+                }
+                Some(Field::UInt32(v)) => *v,
+                Some(Field::UInt16(v)) => *v as u32,
+                _ => 0,
+            }
+        }
+
+        // 读取产出物品 ID
+        let result_item_id = read_i32_as_u32(row, COL_ITEM_RESULT);
+        if result_item_id == 0 {
+            return None;
+        }
+
+        let craft_type = match row.columns.get(COL_CRAFT_TYPE) {
+            Some(Field::Int32(v)) => *v as u8,
+            Some(Field::UInt8(v)) => *v,
+            _ => 0,
+        };
+
+        let recipe_level = match row.columns.get(COL_RECIPE_LEVEL) {
+            Some(Field::UInt16(v)) => *v,
+            Some(Field::UInt8(v)) => *v as u16,
+            _ => 0,
+        };
+
+        let result_amount = match row.columns.get(COL_AMOUNT_RESULT) {
+            Some(Field::UInt8(v)) => *v,
+            _ => 1,
+        };
+
+        // 读取素材 (8 对交错排列)
+        let mut ingredients = Vec::new();
+        for i in 0..8 {
+            let id_col = COL_INGREDIENT_START + i * 2;
+            let amt_col = id_col + 1;
+            let ing_id = read_i32_as_u32(row, id_col);
+            let ing_amount = match row.columns.get(amt_col) {
+                Some(Field::UInt8(v)) => *v,
+                _ => 0,
+            };
+            if ing_id != 0 && ing_amount > 0 {
+                ingredients.push((ing_id, ing_amount));
+            }
+        }
+
+        if ingredients.is_empty() {
+            return None;
+        }
+
+        Some(Recipe {
+            row_id,
+            result_item_id,
+            result_amount,
+            craft_type,
+            recipe_level,
+            ingredients,
+        })
     }
 }

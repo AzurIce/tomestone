@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ── 页面路由 ──
 
@@ -7,6 +7,7 @@ pub enum AppPage {
     Browser,
     GlamourManager,
     HousingBrowser,
+    CraftingBrowser,
     ResourceBrowser,
     Test,
 }
@@ -414,5 +415,128 @@ pub fn shade_group_name(shade: u8) -> &'static str {
         10 => "特殊",
         1 => "其他",
         _ => "未知",
+    }
+}
+
+// ── 合成系统 ──
+
+/// 制作职业名称 (CraftType 0-7)
+pub const CRAFT_TYPE_NAMES: [&str; 8] = [
+    "刻木匠",
+    "锻铁匠",
+    "铸甲匠",
+    "雕金匠",
+    "制革匠",
+    "裁衣匠",
+    "炼金术士",
+    "烹调师",
+];
+
+/// 制作职业缩写
+pub const CRAFT_TYPE_ABBRS: [&str; 8] = [
+    "木工", "锻冶", "甲胄", "雕金", "皮革", "裁缝", "炼金", "烹调",
+];
+
+/// 配方数据 (来自 Recipe EXD 表)
+#[derive(Debug, Clone)]
+pub struct Recipe {
+    pub row_id: u32,
+    /// 产出物品 ID (链接到 Item 表)
+    pub result_item_id: u32,
+    /// 产出数量
+    pub result_amount: u8,
+    /// 制作职业 (0=CRP .. 7=CUL)
+    pub craft_type: u8,
+    /// 配方等级 (链接到 RecipeLevelTable)
+    pub recipe_level: u16,
+    /// 素材列表: (item_id, amount)，已过滤掉 item_id==0 的空槽
+    pub ingredients: Vec<(u32, u8)>,
+}
+
+/// 合成树节点
+#[derive(Debug, Clone)]
+pub struct CraftTreeNode {
+    pub item_id: u32,
+    /// 需要的数量
+    pub amount_needed: u32,
+    /// 如果此素材本身可制作，对应的配方索引
+    pub recipe_idx: Option<usize>,
+    /// 子节点 (仅当 recipe_idx.is_some() 时有子节点)
+    pub children: Vec<CraftTreeNode>,
+}
+
+/// 递归构建合成树
+/// recipes: 全部配方列表
+/// item_to_recipes: item_id -> 配方索引列表 (取第一个)
+/// visited: 防止循环引用
+pub fn build_craft_tree(
+    item_id: u32,
+    amount: u32,
+    recipes: &[Recipe],
+    item_to_recipes: &HashMap<u32, Vec<usize>>,
+    visited: &mut HashSet<u32>,
+) -> CraftTreeNode {
+    // 查找此物品是否有配方
+    let recipe_idx = if !visited.contains(&item_id) {
+        item_to_recipes
+            .get(&item_id)
+            .and_then(|indices| indices.first().copied())
+    } else {
+        None
+    };
+
+    let children = if let Some(idx) = recipe_idx {
+        visited.insert(item_id);
+        let recipe = &recipes[idx];
+        // 计算需要制作几次 (向上取整)
+        let craft_count = (amount as f64 / recipe.result_amount.max(1) as f64).ceil() as u32;
+        let children = recipe
+            .ingredients
+            .iter()
+            .map(|&(ing_id, ing_amount)| {
+                let total = ing_amount as u32 * craft_count;
+                build_craft_tree(ing_id, total, recipes, item_to_recipes, visited)
+            })
+            .collect();
+        visited.remove(&item_id);
+        children
+    } else {
+        Vec::new()
+    };
+
+    CraftTreeNode {
+        item_id,
+        amount_needed: amount,
+        recipe_idx,
+        children,
+    }
+}
+
+/// 感知折叠状态的素材汇总
+/// collapsed 中的 (item_id, depth) 对应的节点视为叶子 (不展开子配方)
+pub fn summarize_materials_with_collapsed(
+    node: &CraftTreeNode,
+    collapsed: &HashSet<(u32, usize)>,
+) -> Vec<(u32, u32)> {
+    let mut map: HashMap<u32, u32> = HashMap::new();
+    collect_leaves_collapsed(node, 0, collapsed, &mut map);
+    let mut result: Vec<(u32, u32)> = map.into_iter().collect();
+    result.sort_by_key(|&(id, _)| id);
+    result
+}
+
+fn collect_leaves_collapsed(
+    node: &CraftTreeNode,
+    depth: usize,
+    collapsed: &HashSet<(u32, usize)>,
+    map: &mut HashMap<u32, u32>,
+) {
+    // 叶子节点，或者被折叠的非叶子节点 → 视为原始素材
+    if node.children.is_empty() || collapsed.contains(&(node.item_id, depth)) {
+        *map.entry(node.item_id).or_insert(0) += node.amount_needed;
+    } else {
+        for child in &node.children {
+            collect_leaves_collapsed(child, depth + 1, collapsed, map);
+        }
     }
 }

@@ -12,6 +12,7 @@ use crate::game::{
 use crate::loading::GameState;
 use crate::ui::components::dye_palette;
 use crate::ui::components::equipment_list::HighlightConfig;
+use crate::ui::components::item_detail::{self, ItemDetailConfig};
 
 impl App {
     pub fn show_browser_page(&mut self, ctx: &egui::Context, gs: &mut GameState) {
@@ -117,12 +118,19 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(idx) = self.selected_item {
                 if let Some(item) = gs.all_items.get(idx) {
-                    ui.horizontal(|ui| {
-                        if let Some(icon) = self.get_or_load_icon(ctx, &gs.game, item.icon_id) {
-                            ui.image(&icon);
-                        }
-                        ui.heading(&item.name);
-                    });
+                    // 统一物品详情头部
+                    let icon = self.get_or_load_icon(ctx, &gs.game, item.icon_id);
+                    let cat_name = gs
+                        .ui_category_names
+                        .get(&item.item_ui_category)
+                        .map(|s| s.as_str());
+                    item_detail::show_item_detail_header(
+                        ui,
+                        item,
+                        icon.as_ref(),
+                        cat_name,
+                        &ItemDetailConfig::default(),
+                    );
                     ui.separator();
                     let prefix = if item.is_accessory() { "a" } else { "e" };
                     egui::Grid::new("item_info").show(ui, |ui| {

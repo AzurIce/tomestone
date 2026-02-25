@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eframe::egui;
 
+use super::item_list;
 use crate::domain::{EquipSlot, EquipmentSet, GameItem, SortOrder, ViewMode};
 use crate::game::GameData;
 
@@ -54,41 +55,6 @@ impl<'a> Default for HighlightConfig<'a> {
 
 static EMPTY_SET: std::sync::LazyLock<HashSet<u32>> = std::sync::LazyLock::new(HashSet::new);
 
-/// 从 icon_cache 获取或加载图标
-fn get_or_load_icon(
-    icon_cache: &mut HashMap<u32, Option<egui::TextureHandle>>,
-    ctx: &egui::Context,
-    game: &GameData,
-    icon_id: u32,
-) -> Option<egui::TextureHandle> {
-    if icon_id == 0 {
-        return None;
-    }
-    if let Some(cached) = icon_cache.get(&icon_id) {
-        return cached.clone();
-    }
-    let result = game.load_icon(icon_id).map(|tex_data| {
-        let size = [tex_data.width as _, tex_data.height as _];
-        let pixels: Vec<egui::Color32> = tex_data
-            .rgba
-            .chunks_exact(4)
-            .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
-            .collect();
-        let color_image = egui::ColorImage {
-            size,
-            pixels,
-            source_size: egui::Vec2::new(40.0, 40.0),
-        };
-        ctx.load_texture(
-            format!("icon_{}", icon_id),
-            color_image,
-            egui::TextureOptions::default(),
-        )
-    });
-    icon_cache.insert(icon_id, result.clone());
-    result
-}
-
 /// 渲染带图标的物品行
 fn show_item_row(
     ui: &mut egui::Ui,
@@ -100,7 +66,7 @@ fn show_item_row(
     rich: egui::RichText,
 ) -> bool {
     let response = ui.horizontal(|ui| {
-        if let Some(icon) = get_or_load_icon(icon_cache, ctx, game, icon_id) {
+        if let Some(icon) = item_list::get_or_load_icon(icon_cache, ctx, game, icon_id) {
             ui.image(egui::load::SizedTexture::new(
                 icon.id(),
                 egui::vec2(20.0, 20.0),
@@ -447,7 +413,7 @@ impl EquipmentListState {
                                 egui::vec2(icon_size, icon_size),
                             );
                             if let Some(icon) =
-                                get_or_load_icon(icon_cache, ctx, game, item.icon_id)
+                                item_list::get_or_load_icon(icon_cache, ctx, game, item.icon_id)
                             {
                                 ui.painter().image(
                                     icon.id(),

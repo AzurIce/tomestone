@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use physis::stm::StainingTemplate;
 
-use crate::domain::{build_equipment_sets, EquipmentSet, GameItem, Recipe, StainEntry, ALL_SLOTS};
+use crate::domain::{
+    build_equipment_sets, EquipmentSet, GameItem, ItemSource, Recipe, StainEntry, ALL_SLOTS,
+};
 use crate::game::GameData;
 use crate::glamour;
 use crate::ui::pages::resource::ResourceBrowserState;
@@ -40,6 +42,12 @@ pub struct GameState {
     /// 可制作物品在 all_items 中的下标，按 craft_type 分组
     /// craftable_by_type[craft_type] = Vec<(all_items下标, recipe下标)>
     pub craftable_by_type: [Vec<(usize, usize)>; 8],
+
+    // ── 物品来源 ──
+    /// item_id -> 获取来源列表
+    pub item_sources: HashMap<u32, Vec<ItemSource>>,
+    /// ItemUICategory row_id -> 分类名称
+    pub ui_category_names: HashMap<u8, String>,
 }
 
 pub enum LoadProgress {
@@ -56,6 +64,10 @@ pub struct LoadedData {
     pub all_table_names: Vec<String>,
     pub housing_sgb_paths: HashMap<u32, Vec<String>>,
     pub recipes: Vec<Recipe>,
+    pub ui_category_names: HashMap<u8, String>,
+    pub gil_shop_items: std::collections::HashMap<u32, Vec<ItemSource>>,
+    pub special_shop_sources: HashMap<u32, Vec<ItemSource>>,
+    pub gathering_items: std::collections::HashSet<u32>,
 }
 
 pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<LoadProgress>) {
@@ -86,6 +98,12 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let _ = tx.send(LoadProgress::Status("正在加载配方数据...".to_string()));
     let recipes = game.load_recipes();
 
+    let _ = tx.send(LoadProgress::Status("正在加载物品来源数据...".to_string()));
+    let ui_category_names = game.load_ui_category_names();
+    let gil_shop_items = game.load_gil_shop_items();
+    let special_shop_sources = game.load_special_shop_sources();
+    let gathering_items = game.load_gathering_items();
+
     let _ = tx.send(LoadProgress::Done(Box::new(LoadedData {
         game,
         all_items,
@@ -94,6 +112,10 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
         all_table_names,
         housing_sgb_paths,
         recipes,
+        ui_category_names,
+        gil_shop_items,
+        special_shop_sources,
+        gathering_items,
     })));
 }
 
@@ -171,12 +193,37 @@ impl GameState {
             }
         }
 
+        // 构建物品来源索引
+        let mut item_sources: HashMap<u32, Vec<ItemSource>> = HashMap::new();
+        // 金币商店
+        for (item_id, sources) in data.gil_shop_items {
+            item_sources.entry(item_id).or_default().extend(sources);
+        }
+        // 特殊兑换
+        for (item_id, sources) in data.special_shop_sources {
+            item_sources.entry(item_id).or_default().extend(sources);
+        }
+        // 采集
+        for &item_id in &data.gathering_items {
+            item_sources
+                .entry(item_id)
+                .or_default()
+                .push(ItemSource::Gathering);
+        }
+
+        // 按消耗去重: 多个商店/兑换点但消耗相同的只保留一个
+        for sources in item_sources.values_mut() {
+            let mut seen = std::collections::HashSet::new();
+            sources.retain(|s| seen.insert(s.cost_key()));
+        }
+
         println!(
-            "物品总数: {}, 装备: {}, 房屋外装: {}, 配方: {}",
+            "物品总数: {}, 装备: {}, 房屋外装: {}, 配方: {}, 有来源物品: {}",
             data.all_items.len(),
             equipment_indices.len(),
             housing_ext_indices.len(),
             data.recipes.len(),
+            item_sources.len(),
         );
 
         Self {
@@ -195,6 +242,8 @@ impl GameState {
             recipes: data.recipes,
             item_to_recipes,
             craftable_by_type,
+            item_sources,
+            ui_category_names: data.ui_category_names,
         }
     }
 }

@@ -7,11 +7,13 @@ use eframe::egui;
 use crate::config;
 use crate::domain::EquipSlot;
 use crate::domain::ExteriorPartType;
+use crate::domain::SourceChoice;
 use crate::domain::ViewMode;
 use crate::game::{CachedMaterial, GameData, MeshData};
 use crate::glamour;
 use crate::loading::*;
 use crate::ui::components::equipment_list::EquipmentListState;
+use crate::ui::components::item_list::ItemListState;
 use crate::ui::components::viewport::ViewportState;
 use crate::ui::components::{show_progress_bar, ProgressTracker};
 
@@ -59,17 +61,15 @@ pub struct App {
     pub housing_selected_part_type: Option<ExteriorPartType>,
     pub housing_selected_item: Option<usize>,
     pub housing_loaded_model_idx: Option<usize>,
-    pub housing_search: String,
-    pub housing_view_mode: ViewMode,
-    pub housing_icon_size: f32,
+    pub housing_list: ItemListState,
     // 合成检索状态
-    pub crafting_search: String,
+    pub crafting_list: ItemListState,
     pub crafting_selected_craft_type: Option<u8>,
     pub crafting_selected_item: Option<usize>,
     pub crafting_selected_node_item: Option<u32>,
     pub crafting_selected_node_amount: u32,
-    pub crafting_view_mode: ViewMode,
-    pub crafting_icon_size: f32,
+    /// 用户对素材来源的手动选择 (item_id -> SourceChoice)
+    pub crafting_source_overrides: HashMap<u32, SourceChoice>,
 }
 
 impl App {
@@ -126,16 +126,13 @@ impl App {
             housing_selected_part_type: None,
             housing_selected_item: None,
             housing_loaded_model_idx: None,
-            housing_search: String::new(),
-            housing_view_mode: ViewMode::Grid,
-            housing_icon_size: 48.0,
-            crafting_search: String::new(),
+            housing_list: ItemListState::new(ViewMode::Grid),
+            crafting_list: ItemListState::new(ViewMode::List),
             crafting_selected_craft_type: None,
             crafting_selected_item: None,
             crafting_selected_node_item: None,
             crafting_selected_node_amount: 0,
-            crafting_view_mode: ViewMode::List,
-            crafting_icon_size: 48.0,
+            crafting_source_overrides: HashMap::new(),
         }
     }
 

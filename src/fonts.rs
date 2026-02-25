@@ -22,5 +22,10 @@ pub fn setup_fonts(ctx: &egui::Context) {
         .get_mut(&egui::FontFamily::Monospace)
         .unwrap()
         .push("Harmony OS Sans".to_owned());
+
+    // Phosphor Icons (Regular + Fill)
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Fill);
+
     ctx.set_fonts(fonts);
 }

@@ -1,5 +1,7 @@
 pub mod dye_palette;
 pub mod equipment_list;
+pub mod item_detail;
+pub mod item_list;
 pub mod progress;
 pub mod viewport;
 

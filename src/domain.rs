@@ -216,6 +216,14 @@ pub struct GameItem {
     pub model_main: u64,
     /// 附加数据 (FilterGroup=14 时链接到 HousingExterior 等)
     pub additional_data: u32,
+    /// 物品描述
+    pub description: String,
+    /// NPC 买入价 (收购价)
+    pub price_mid: u32,
+    /// NPC 卖出价
+    pub price_low: u32,
+    /// 市场板搜索分类 (>0 表示可在市场板交易)
+    pub item_search_category: u8,
 }
 
 impl GameItem {
@@ -300,6 +308,11 @@ impl GameItem {
             .iter()
             .filter_map(|rc| self.model_path_for_race(rc))
             .collect()
+    }
+
+    /// 是否可在市场板交易 (Universalis 可查)
+    pub fn is_marketable(&self) -> bool {
+        self.item_search_category > 0
     }
 
     /// 是否为房屋外装物品
@@ -525,6 +538,34 @@ pub fn summarize_materials_with_collapsed(
     result
 }
 
+/// 计算整棵合成树中某个物品的总需求量 (感知折叠状态)
+pub fn total_amount_in_tree(
+    node: &CraftTreeNode,
+    target_id: u32,
+    depth: usize,
+    collapsed: &HashSet<(u32, usize)>,
+) -> u32 {
+    if node.item_id == target_id {
+        // 如果是叶子或被折叠，直接返回需求量
+        if node.children.is_empty() || collapsed.contains(&(node.item_id, depth)) {
+            return node.amount_needed;
+        }
+    }
+    // 如果被折叠，不递归子节点
+    if collapsed.contains(&(node.item_id, depth)) {
+        return if node.item_id == target_id {
+            node.amount_needed
+        } else {
+            0
+        };
+    }
+    let mut total = 0;
+    for child in &node.children {
+        total += total_amount_in_tree(child, target_id, depth + 1, collapsed);
+    }
+    total
+}
+
 fn collect_leaves_collapsed(
     node: &CraftTreeNode,
     depth: usize,
@@ -538,5 +579,103 @@ fn collect_leaves_collapsed(
         for child in &node.children {
             collect_leaves_collapsed(child, depth + 1, collapsed, map);
         }
+    }
+}
+
+// ── 物品来源 ──
+
+/// 物品获取来源
+#[derive(Debug, Clone)]
+pub enum ItemSource {
+    /// 金币商店可购买 (价格从 Item.price_mid 获取)
+    GilShop {
+        shop_name: String,
+        npc_location: Option<String>,
+    },
+    /// 特殊兑换 (诗学/军票/代币等)
+    SpecialShop {
+        shop_name: String,
+        cost_item_id: u32,
+        cost_count: u32,
+    },
+    /// 采集 (采矿/园艺)
+    Gathering,
+}
+
+impl ItemSource {
+    pub fn label(&self) -> &str {
+        match self {
+            Self::GilShop { .. } => "金币商店",
+            Self::SpecialShop { .. } => "兑换",
+            Self::Gathering => "采集",
+        }
+    }
+
+    /// 用于 UI 着色的来源类型标识
+    pub fn color_tag(&self) -> u8 {
+        match self {
+            Self::GilShop { .. } => 1,
+            Self::SpecialShop { .. } => 2,
+            Self::Gathering => 3,
+        }
+    }
+
+    /// 用于去重的消耗指纹: 相同消耗的来源视为重复
+    /// GilShop 价格来自 Item.price_mid，所有金币商店消耗相同 → 统一 key
+    /// SpecialShop 按 (cost_item_id, cost_count) 区分
+    /// Gathering 只有一种
+    pub fn cost_key(&self) -> (u8, u32, u32) {
+        match self {
+            Self::GilShop { .. } => (1, 0, 0),
+            Self::SpecialShop {
+                cost_item_id,
+                cost_count,
+                ..
+            } => (2, *cost_item_id, *cost_count),
+            Self::Gathering => (3, 0, 0),
+        }
+    }
+
+    /// 默认优先级 (越小越优先): 金币商店 > 采集 > 兑换
+    pub fn priority(&self) -> u8 {
+        match self {
+            Self::GilShop { .. } => 1,
+            Self::Gathering => 2,
+            Self::SpecialShop { .. } => 3,
+        }
+    }
+}
+
+/// 用户对某个素材的来源选择
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceChoice {
+    /// 使用 item_sources 列表中的第 N 个来源
+    Index(usize),
+    /// 忽略 (已持有/不统计成本)
+    Ignore,
+}
+
+/// 根据来源列表选择默认最优来源的索引
+pub fn default_source_index(sources: &[ItemSource]) -> Option<usize> {
+    if sources.is_empty() {
+        return None;
+    }
+    sources
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, s)| s.priority())
+        .map(|(i, _)| i)
+}
+
+/// 获取用户选择的来源 (考虑 override)
+pub fn resolve_source<'a>(
+    item_id: u32,
+    sources: &'a [ItemSource],
+    overrides: &std::collections::HashMap<u32, SourceChoice>,
+) -> Option<&'a ItemSource> {
+    match overrides.get(&item_id) {
+        Some(SourceChoice::Ignore) => None,
+        Some(SourceChoice::Index(i)) => sources.get(*i),
+        None => default_source_index(sources).and_then(|i| sources.get(i)),
     }
 }

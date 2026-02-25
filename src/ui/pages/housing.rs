@@ -7,6 +7,8 @@ use crate::game::{
     MeshData,
 };
 use crate::loading::GameState;
+use crate::ui::components::item_detail::{self, ItemDetailConfig};
+use crate::ui::components::item_list::{self, DisplayItem};
 
 impl App {
     pub fn show_housing_page(&mut self, ctx: &egui::Context, gs: &mut GameState) {
@@ -39,48 +41,11 @@ impl App {
 
                 ui.separator();
 
-                // 搜索框 + 视图模式
-                ui.horizontal(|ui| {
-                    ui.label("搜索:");
-                    ui.text_edit_singleline(&mut self.housing_search);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("视图:");
-                    if ui
-                        .selectable_label(
-                            self.housing_view_mode == ViewMode::List,
-                            ViewMode::List.label(),
-                        )
-                        .clicked()
-                    {
-                        self.housing_view_mode = ViewMode::List;
-                    }
-                    if ui
-                        .selectable_label(
-                            self.housing_view_mode == ViewMode::Grid,
-                            ViewMode::Grid.label(),
-                        )
-                        .clicked()
-                    {
-                        self.housing_view_mode = ViewMode::Grid;
-                    }
-                });
-
-                // 图标大小滑块 (仅图标视图)
-                if self.housing_view_mode == ViewMode::Grid {
-                    ui.horizontal(|ui| {
-                        ui.label("图标:");
-                        ui.add(
-                            egui::Slider::new(&mut self.housing_icon_size, 32.0..=128.0)
-                                .suffix("px"),
-                        );
-                    });
-                }
-
-                ui.separator();
+                // 搜索框 + 视图模式 + 图标大小
+                self.housing_list.show_controls(ui);
 
                 // 物品列表: 从 housing_ext_indices 获取 all_items 中的下标
-                let search_lower = self.housing_search.to_lowercase();
+                let search_lower = self.housing_list.search_lower();
                 let filtered: Vec<(usize, &GameItem)> = gs
                     .housing_ext_indices
                     .iter()
@@ -103,94 +68,30 @@ impl App {
                 ui.label(format!("{} 件物品", filtered.len()));
                 ui.separator();
 
-                match self.housing_view_mode {
+                // 构建 DisplayItem 列表
+                let display_items: Vec<DisplayItem<'_>> = filtered
+                    .iter()
+                    .map(|&(idx, item)| DisplayItem {
+                        id: idx,
+                        name: &item.name,
+                        icon_id: item.icon_id,
+                        is_selected: self.housing_selected_item == Some(idx),
+                    })
+                    .collect();
+
+                match self.housing_list.view_mode {
                     ViewMode::Grid => {
-                        let available_width = ui.available_width();
-                        let icon_size = self.housing_icon_size;
-                        let cell_padding = 4.0;
-                        let text_height = 14.0;
-                        let text_lines = 2;
-                        let cell_width = (icon_size + cell_padding * 2.0).min(available_width);
-                        let cell_height =
-                            icon_size + cell_padding * 2.0 + text_height * text_lines as f32;
-                        let cols = ((available_width / cell_width).floor() as usize).max(1);
-                        let actual_cell_width = available_width / cols as f32;
-                        let total_rows = (filtered.len() + cols - 1) / cols;
-
-                        egui::ScrollArea::vertical()
-                            .id_salt("housing_grid_scroll")
-                            .show_rows(ui, cell_height, total_rows, |ui, row_range| {
-                                for row_idx in row_range {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing.x = 0.0;
-                                        let start = row_idx * cols;
-                                        let end = (start + cols).min(filtered.len());
-                                        for i in start..end {
-                                            let (idx, item) = &filtered[i];
-                                            let is_selected =
-                                                self.housing_selected_item == Some(*idx);
-
-                                            let (rect, response) = ui.allocate_exact_size(
-                                                egui::vec2(actual_cell_width, cell_height),
-                                                egui::Sense::click(),
-                                            );
-
-                                            // 背景高亮
-                                            if is_selected || response.hovered() {
-                                                let bg_color = if is_selected {
-                                                    ui.visuals().selection.bg_fill
-                                                } else {
-                                                    ui.visuals().widgets.hovered.bg_fill
-                                                };
-                                                ui.painter().rect_filled(rect, 2.0, bg_color);
-                                            }
-
-                                            // 图标 (居中在上半部分)
-                                            let icon_top = rect.top() + cell_padding;
-                                            let icon_center_x = rect.center().x;
-                                            let icon_rect = egui::Rect::from_center_size(
-                                                egui::pos2(
-                                                    icon_center_x,
-                                                    icon_top + icon_size / 2.0,
-                                                ),
-                                                egui::vec2(icon_size, icon_size),
-                                            );
-                                            if let Some(icon) =
-                                                self.get_or_load_icon(ctx, &gs.game, item.icon_id)
-                                            {
-                                                ui.painter().image(
-                                                    icon.id(),
-                                                    icon_rect,
-                                                    egui::Rect::from_min_max(
-                                                        egui::pos2(0.0, 0.0),
-                                                        egui::pos2(1.0, 1.0),
-                                                    ),
-                                                    egui::Color32::WHITE,
-                                                );
-                                            }
-
-                                            // 文字名称 (图标下方，裁剪到单元格范围)
-                                            let text_top = icon_top + icon_size + cell_padding;
-                                            let text_color = ui.visuals().text_color();
-                                            let clipped = ui.painter().with_clip_rect(rect);
-                                            clipped.text(
-                                                egui::pos2(rect.center().x, text_top),
-                                                egui::Align2::CENTER_TOP,
-                                                &item.name,
-                                                egui::FontId::proportional(11.0),
-                                                text_color,
-                                            );
-
-                                            // tooltip
-                                            response.clone().on_hover_text(&item.name);
-
-                                            if response.clicked() {
-                                                self.housing_selected_item = Some(*idx);
-                                            }
-                                        }
-                                    });
-                                }
-                            });
+                        if let Some(clicked) = item_list::show_grid_scroll(
+                            ui,
+                            &display_items,
+                            self.housing_list.icon_size,
+                            "housing",
+                            &mut self.icon_cache,
+                            ctx,
+                            &gs.game,
+                        ) {
+                            self.housing_selected_item = Some(clicked);
+                        }
                     }
                     ViewMode::List => {
                         let row_height = 28.0;
@@ -202,28 +103,25 @@ impl App {
                             |ui, row_range| {
                                 for i in row_range {
                                     let (idx, item) = &filtered[i];
-                                    let is_selected = self.housing_selected_item == Some(*idx);
-                                    let response = ui.horizontal(|ui| {
-                                        if let Some(icon) =
-                                            self.get_or_load_icon(ctx, &gs.game, item.icon_id)
-                                        {
-                                            ui.image(egui::load::SizedTexture::new(
-                                                icon.id(),
-                                                egui::vec2(24.0, 24.0),
-                                            ));
-                                        } else {
-                                            ui.allocate_space(egui::vec2(24.0, 24.0));
-                                        }
-
-                                        let part_name = item
-                                            .exterior_part_type()
-                                            .map(|pt| pt.display_name())
-                                            .unwrap_or("?");
-                                        let label = format!("[{}] {}", part_name, item.name);
-                                        ui.selectable_label(is_selected, label)
-                                    });
-
-                                    if response.inner.clicked() {
+                                    let part_name = item
+                                        .exterior_part_type()
+                                        .map(|pt| pt.display_name())
+                                        .unwrap_or("?");
+                                    let label = format!("[{}] {}", part_name, item.name);
+                                    let di = DisplayItem {
+                                        id: *idx,
+                                        name: &item.name,
+                                        icon_id: item.icon_id,
+                                        is_selected: self.housing_selected_item == Some(*idx),
+                                    };
+                                    if item_list::show_list_row(
+                                        ui,
+                                        &di,
+                                        &label,
+                                        &mut self.icon_cache,
+                                        ctx,
+                                        &gs.game,
+                                    ) {
                                         self.housing_selected_item = Some(*idx);
                                     }
                                 }
@@ -240,12 +138,19 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(idx) = self.housing_selected_item {
                 if let Some(item) = gs.all_items.get(idx) {
-                    ui.horizontal(|ui| {
-                        if let Some(icon) = self.get_or_load_icon(ctx, &gs.game, item.icon_id) {
-                            ui.image(&icon);
-                        }
-                        ui.heading(&item.name);
-                    });
+                    // 统一物品详情头部
+                    let icon = self.get_or_load_icon(ctx, &gs.game, item.icon_id);
+                    let cat_name = gs
+                        .ui_category_names
+                        .get(&item.item_ui_category)
+                        .map(|s| s.as_str());
+                    item_detail::show_item_detail_header(
+                        ui,
+                        item,
+                        icon.as_ref(),
+                        cat_name,
+                        &ItemDetailConfig::default(),
+                    );
                     ui.separator();
 
                     let sgb_paths = gs.housing_sgb_paths.get(&item.additional_data);

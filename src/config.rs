@@ -52,3 +52,7 @@ pub fn glamours_dir() -> PathBuf {
 pub fn schema_dir() -> PathBuf {
     data_subdir("schema")
 }
+
+pub fn templates_dir() -> PathBuf {
+    data_subdir("templates")
+}

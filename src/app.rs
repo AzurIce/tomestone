@@ -70,6 +70,10 @@ pub struct App {
     pub crafting_selected_node_amount: u32,
     /// 用户对素材来源的手动选择 (item_id -> SourceChoice)
     pub crafting_source_overrides: HashMap<u32, SourceChoice>,
+    // 工具箱: 自动制作
+    pub auto_craft: crate::ui::pages::toolbox::AutoCraftUi,
+    // 工具箱: 模板编辑器
+    pub template_editor: crate::ui::components::template_editor::TemplateEditorState,
 }
 
 impl App {
@@ -133,6 +137,8 @@ impl App {
             crafting_selected_node_item: None,
             crafting_selected_node_amount: 0,
             crafting_source_overrides: HashMap::new(),
+            auto_craft: Default::default(),
+            template_editor: Default::default(),
         }
     }
 
@@ -270,6 +276,11 @@ impl App {
                 );
                 ui.selectable_value(
                     &mut self.current_page,
+                    crate::domain::AppPage::Toolbox,
+                    "工具箱",
+                );
+                ui.selectable_value(
+                    &mut self.current_page,
                     crate::domain::AppPage::ResourceBrowser,
                     "EXD 浏览器",
                 );
@@ -300,6 +311,7 @@ impl App {
             crate::domain::AppPage::GlamourManager => self.show_glamour_manager_page(ctx, gs),
             crate::domain::AppPage::HousingBrowser => self.show_housing_page(ctx, gs),
             crate::domain::AppPage::CraftingBrowser => self.show_crafting_page(ctx, gs),
+            crate::domain::AppPage::Toolbox => self.show_toolbox_page(ctx),
             crate::domain::AppPage::ResourceBrowser => gs.resource_browser.show(ctx, &gs.game),
             crate::domain::AppPage::Test => self.show_test_page(ctx),
         }

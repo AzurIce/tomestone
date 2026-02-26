@@ -1,0 +1,14 @@
+STM 加载成功: 43 个模板
+HousingExterior 表: 138 条有效记录
+Recipe 表: 13705 条有效配方
+GilShop: 893 个商店
+  GilShop row_id=262337: 购买能工巧匠及大地使者防具
+  GilShop row_id=262760: 购买武器（58级）
+  GilShop row_id=263068: 购买战斗饰品
+  GilShop row_id=263142: 购买工具
+  GilShop row_id=263270: 购买大地使者防具
+GilShopItem: hit=893, miss=215, sample_misses=[262144, 262145, 262152, 262153, 262154, 262155, 262156, 262157, 262159, 262160]
+GilShopItem: 536 种商品
+SpecialShop: 137 种可兑换物品
+GatheringItem: 1906 种可采集物品
+物品总数: 49250, 装备: 19984, 房屋外装: 138, 配方: 13705, 有来源物品: 2566

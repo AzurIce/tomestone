@@ -3,6 +3,7 @@ pub mod equipment_list;
 pub mod item_detail;
 pub mod item_list;
 pub mod progress;
+pub mod template_editor;
 pub mod viewport;
 
 pub use progress::{show_progress_bar, ProgressStatus, ProgressTracker, ProgressUnit};

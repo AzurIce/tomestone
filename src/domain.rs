@@ -8,6 +8,7 @@ pub enum AppPage {
     GlamourManager,
     HousingBrowser,
     CraftingBrowser,
+    Toolbox,
     ResourceBrowser,
     Test,
 }

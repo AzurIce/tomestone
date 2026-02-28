@@ -7,6 +7,7 @@ use eframe::egui;
 use crate::config;
 use crate::domain::EquipSlot;
 use crate::domain::ExteriorPartType;
+use crate::domain::HousingSubTab;
 use crate::domain::SourceChoice;
 use crate::domain::ViewMode;
 use crate::game::{CachedMaterial, GameData, MeshData};
@@ -56,12 +57,21 @@ pub struct App {
     pub test_total: u64,
     pub test_current: u64,
     pub icon_cache: HashMap<u32, Option<egui::TextureHandle>>,
-    // 房屋外装浏览器状态
+    // 房屋浏览器状态
     pub housing_viewport: ViewportState,
+    pub housing_sub_tab: HousingSubTab,
     pub housing_selected_part_type: Option<ExteriorPartType>,
+    pub housing_selected_ui_category: Option<u8>,
     pub housing_selected_item: Option<usize>,
     pub housing_loaded_model_idx: Option<usize>,
     pub housing_list: ItemListState,
+    pub housing_cached_materials: HashMap<u16, CachedMaterial>,
+    pub housing_cached_meshes: Vec<MeshData>,
+    pub housing_stain_ids: [u32; 2],
+    pub housing_active_dye_channel: usize,
+    pub housing_selected_shade: u8,
+    pub housing_is_dual_dye: bool,
+    pub housing_needs_rebake: bool,
     // 合成检索状态
     pub crafting_list: ItemListState,
     pub crafting_selected_craft_type: Option<u8>,
@@ -127,10 +137,19 @@ impl App {
             test_current: 0,
             icon_cache: HashMap::new(),
             housing_viewport,
+            housing_sub_tab: HousingSubTab::Exterior,
             housing_selected_part_type: None,
+            housing_selected_ui_category: None,
             housing_selected_item: None,
             housing_loaded_model_idx: None,
             housing_list: ItemListState::new(ViewMode::Grid),
+            housing_cached_materials: HashMap::new(),
+            housing_cached_meshes: Vec::new(),
+            housing_stain_ids: [0, 0],
+            housing_active_dye_channel: 0,
+            housing_selected_shade: 2,
+            housing_is_dual_dye: false,
+            housing_needs_rebake: false,
             crafting_list: ItemListState::new(ViewMode::List),
             crafting_selected_craft_type: None,
             crafting_selected_item: None,
@@ -267,7 +286,7 @@ impl App {
                 ui.selectable_value(
                     &mut self.current_page,
                     crate::domain::AppPage::HousingBrowser,
-                    "房屋外装",
+                    "房屋",
                 );
                 ui.selectable_value(
                     &mut self.current_page,

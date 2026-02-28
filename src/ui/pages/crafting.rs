@@ -5,7 +5,7 @@ use eframe::egui;
 use crate::app::App;
 use crate::domain::{
     build_craft_tree, resolve_source, summarize_materials_with_collapsed, total_amount_in_tree,
-    CraftTreeNode, ItemSource, SourceChoice, ViewMode, CRAFT_TYPE_ABBRS, CRAFT_TYPE_NAMES,
+    CraftTreeNode, ItemSource, Recipe, SourceChoice, ViewMode, CRAFT_TYPE_ABBRS, CRAFT_TYPE_NAMES,
 };
 use crate::loading::GameState;
 use crate::ui::components::item_detail::{self, ItemDetailConfig};
@@ -31,6 +31,14 @@ fn source_tag_text(source: Option<&ItemSource>) -> &'static str {
         Some(ItemSource::Gathering) => "采",
         None => "",
     }
+}
+
+/// 获取配方的实际等级 (从 RecipeLevelTable 查询)
+fn get_recipe_level(recipe: &Recipe, gs: &GameState) -> u8 {
+    gs.recipe_levels
+        .get(&recipe.recipe_level_table_id)
+        .copied()
+        .unwrap_or(1)
 }
 
 impl App {
@@ -149,7 +157,7 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(item_idx) = self.crafting_selected_item {
                 if let Some(item) = gs.all_items.get(item_idx) {
-                    // 顶部: 图标 + 名称
+                    // 顶部: 图标 + 名称 + 配方来源
                     ui.horizontal(|ui| {
                         if let Some(icon) = self.get_or_load_icon(ctx, &gs.game, item.icon_id) {
                             ui.image(egui::load::SizedTexture::new(
@@ -158,6 +166,40 @@ impl App {
                             ));
                         }
                         ui.heading(&item.name);
+
+                        // 显示配方来源 (如果有)
+                        if let Some(recipe_indices) = gs.item_to_recipes.get(&item.row_id) {
+                            if let Some(&recipe_idx) = recipe_indices.first() {
+                                let recipe = &gs.recipes[recipe_idx];
+                                let job_abbr = CRAFT_TYPE_ABBRS[recipe.craft_type.min(7) as usize];
+                                let level = get_recipe_level(recipe, gs);
+
+                                // 只有当 SecretRecipeBook > 0 且能找到名称时才显示秘籍
+                                if recipe.secret_recipe_book > 0 {
+                                    if let Some(name) = gs.secret_recipe_book_names.get(&recipe.secret_recipe_book) {
+                                        ui.label(
+                                            egui::RichText::new(format!("[{}] <{}>", job_abbr, name))
+                                                .small()
+                                                .color(egui::Color32::from_rgb(200, 150, 255)),
+                                        );
+                                    } else {
+                                        // 有 SecretRecipeBook 值但找不到名称
+                                        ui.label(
+                                            egui::RichText::new(format!("[{}] <秘籍>", job_abbr))
+                                                .small()
+                                                .color(egui::Color32::from_rgb(200, 150, 255)),
+                                        );
+                                    }
+                                } else {
+                                    // 普通配方，显示等级
+                                    ui.label(
+                                        egui::RichText::new(format!("[{}] Lv.{}", job_abbr, level))
+                                            .small()
+                                            .weak(),
+                                    );
+                                }
+                            }
+                        }
                     });
                     ui.separator();
 
@@ -339,6 +381,25 @@ impl App {
                 .map(|r| CRAFT_TYPE_ABBRS[r.craft_type.min(7) as usize])
                 .unwrap_or("");
 
+            // 构建配方来源文本
+            let source_text = if let Some(recipe) = craft_info {
+                let level = get_recipe_level(recipe, gs);
+
+                // 只有当 secret_recipe_book > 0 且在表中找到名称时才显示秘籍名
+                if recipe.secret_recipe_book > 0 {
+                    if let Some(name) = gs.secret_recipe_book_names.get(&recipe.secret_recipe_book) {
+                        name.clone()
+                    } else {
+                        // 表中没有对应名称，只显示等级
+                        format!("Lv.{}", level)
+                    }
+                } else {
+                    format!("Lv.{}", level)
+                }
+            } else {
+                String::new()
+            };
+
             let state_id = egui::Id::new(("craft_tree", node.item_id, depth));
             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
                 ui.ctx(),
@@ -395,8 +456,15 @@ impl App {
                     ui.allocate_space(egui::vec2(18.0, 18.0));
                 }
 
-                // 可选中标签
-                let label_text = format!("{} x{} [{}]", item_name, node.amount_needed, job_name);
+                // 可选中标签: 物品名 x数量 [职业] <来源>
+                let label_text = if source_text.is_empty() {
+                    format!("{} x{} [{}]", item_name, node.amount_needed, job_name)
+                } else {
+                    format!(
+                        "{} x{} [{}] <{}>",
+                        item_name, node.amount_needed, job_name, source_text
+                    )
+                };
                 let rt = egui::RichText::new(&label_text).strong();
                 ui.selectable_label(is_selected, rt)
             });
@@ -514,8 +582,20 @@ impl App {
                     ui.label(CRAFT_TYPE_NAMES[recipe.craft_type.min(7) as usize]);
                     ui.end_row();
                     ui.label("配方等级:");
-                    ui.label(format!("{}", recipe.recipe_level));
+                    let level = get_recipe_level(recipe, gs);
+                    ui.label(format!("{}", level));
                     ui.end_row();
+                    // 显示配方来源
+                    if recipe.secret_recipe_book > 0 {
+                        let book_name = gs
+                            .secret_recipe_book_names
+                            .get(&recipe.secret_recipe_book)
+                            .map(|s| s.as_str())
+                            .unwrap_or("秘籍");
+                        ui.label("配方来源:");
+                        ui.label(egui::RichText::new(book_name).color(egui::Color32::from_rgb(200, 150, 255)));
+                        ui.end_row();
+                    }
                     ui.label("单次产出:");
                     ui.label(format!("{}", recipe.result_amount));
                     ui.end_row();

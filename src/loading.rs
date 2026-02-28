@@ -29,6 +29,16 @@ pub struct GameState {
     /// HousingExterior additional_data -> SGB 路径列表
     pub housing_sgb_paths: HashMap<u32, Vec<String>>,
 
+    // ── 房屋家具视图索引 ──
+    /// 庭院家具物品在 all_items 中的下标
+    pub housing_yard_indices: Vec<usize>,
+    /// 室内家具物品在 all_items 中的下标
+    pub housing_indoor_indices: Vec<usize>,
+    /// HousingFurniture additional_data -> SGB 路径 (室内家具)
+    pub housing_furniture_sgb_paths: HashMap<u32, String>,
+    /// HousingYardObject additional_data -> SGB 路径 (庭院家具)
+    pub housing_yard_sgb_paths: HashMap<u32, String>,
+
     // ── 其他数据 ──
     pub stains: Vec<StainEntry>,
     pub stm: Option<StainingTemplate>,
@@ -42,6 +52,10 @@ pub struct GameState {
     /// 可制作物品在 all_items 中的下标，按 craft_type 分组
     /// craftable_by_type[craft_type] = Vec<(all_items下标, recipe下标)>
     pub craftable_by_type: [Vec<(usize, usize)>; 8],
+    /// SecretRecipeBook row_id -> 秘籍名称
+    pub secret_recipe_book_names: HashMap<u32, String>,
+    /// RecipeLevelTable row_id -> 配方等级 (职业等级)
+    pub recipe_levels: HashMap<u16, u8>,
 
     // ── 物品来源 ──
     /// item_id -> 获取来源列表
@@ -63,11 +77,17 @@ pub struct LoadedData {
     pub stm: Option<StainingTemplate>,
     pub all_table_names: Vec<String>,
     pub housing_sgb_paths: HashMap<u32, Vec<String>>,
+    pub housing_furniture_sgb_paths: HashMap<u32, String>,
+    pub housing_yard_sgb_paths: HashMap<u32, String>,
     pub recipes: Vec<Recipe>,
     pub ui_category_names: HashMap<u8, String>,
     pub gil_shop_items: std::collections::HashMap<u32, Vec<ItemSource>>,
     pub special_shop_sources: HashMap<u32, Vec<ItemSource>>,
     pub gathering_items: std::collections::HashSet<u32>,
+    /// SecretRecipeBook row_id -> 名称
+    pub secret_recipe_book_names: HashMap<u32, String>,
+    /// RecipeLevelTable row_id -> 配方等级
+    pub recipe_levels: HashMap<u16, u8>,
 }
 
 pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<LoadProgress>) {
@@ -95,8 +115,14 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let _ = tx.send(LoadProgress::Status("正在加载房屋外装数据...".to_string()));
     let housing_sgb_paths = game.load_housing_sgb_paths();
 
+    let _ = tx.send(LoadProgress::Status("正在加载房屋家具数据...".to_string()));
+    let housing_furniture_sgb_paths = game.load_housing_furniture_sgb_paths();
+    let housing_yard_sgb_paths = game.load_housing_yard_sgb_paths();
+
     let _ = tx.send(LoadProgress::Status("正在加载配方数据...".to_string()));
     let recipes = game.load_recipes();
+    let secret_recipe_book_names = game.load_secret_recipe_book_names();
+    let recipe_levels = game.load_recipe_level_table();
 
     let _ = tx.send(LoadProgress::Status("正在加载物品来源数据...".to_string()));
     let ui_category_names = game.load_ui_category_names();
@@ -111,11 +137,15 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
         stm,
         all_table_names,
         housing_sgb_paths,
+        housing_furniture_sgb_paths,
+        housing_yard_sgb_paths,
         recipes,
         ui_category_names,
         gil_shop_items,
         special_shop_sources,
         gathering_items,
+        secret_recipe_book_names,
+        recipe_levels,
     })));
 }
 
@@ -176,6 +206,29 @@ impl GameState {
             .map(|(i, _)| i)
             .collect();
 
+        // 构建庭院家具视图索引 (直接用 HousingYardObject 表的 Item 列)
+        let housing_yard_indices: Vec<usize> = data
+            .all_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.filter_group == 14 && data.housing_yard_sgb_paths.contains_key(&item.row_id)
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        // 构建室内家具视图索引 (直接用 HousingFurniture 表的 Item 列)
+        let housing_indoor_indices: Vec<usize> = data
+            .all_items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item.filter_group == 14
+                    && data.housing_furniture_sgb_paths.contains_key(&item.row_id)
+            })
+            .map(|(i, _)| i)
+            .collect();
+
         let glamour_sets = glamour::load_all_glamour_sets();
         let resource_browser = ResourceBrowserState::new(data.all_table_names);
 
@@ -218,10 +271,12 @@ impl GameState {
         }
 
         println!(
-            "物品总数: {}, 装备: {}, 房屋外装: {}, 配方: {}, 有来源物品: {}",
+            "物品总数: {}, 装备: {}, 房屋外装: {}, 庭院家具: {}, 室内家具: {}, 配方: {}, 有来源物品: {}",
             data.all_items.len(),
             equipment_indices.len(),
             housing_ext_indices.len(),
+            housing_yard_indices.len(),
+            housing_indoor_indices.len(),
             data.recipes.len(),
             item_sources.len(),
         );
@@ -235,6 +290,10 @@ impl GameState {
             set_id_to_set_idx,
             housing_ext_indices,
             housing_sgb_paths: data.housing_sgb_paths,
+            housing_yard_indices,
+            housing_indoor_indices,
+            housing_furniture_sgb_paths: data.housing_furniture_sgb_paths,
+            housing_yard_sgb_paths: data.housing_yard_sgb_paths,
             stains: data.stains,
             stm: data.stm,
             glamour_sets,
@@ -244,6 +303,8 @@ impl GameState {
             craftable_by_type,
             item_sources,
             ui_category_names: data.ui_category_names,
+            secret_recipe_book_names: data.secret_recipe_book_names,
+            recipe_levels: data.recipe_levels,
         }
     }
 }

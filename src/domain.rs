@@ -13,6 +13,31 @@ pub enum AppPage {
     Test,
 }
 
+// ── 房屋子标签 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HousingSubTab {
+    Exterior, // 外装
+    Yard,     // 庭院家具
+    Indoor,   // 室内家具
+}
+
+impl HousingSubTab {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Exterior => "外装",
+            Self::Yard => "庭院家具",
+            Self::Indoor => "室内家具",
+        }
+    }
+}
+
+pub const HOUSING_SUB_TABS: [HousingSubTab; 3] = [
+    HousingSubTab::Exterior,
+    HousingSubTab::Yard,
+    HousingSubTab::Indoor,
+];
+
 // ── 房屋外装类型 ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -316,10 +341,39 @@ impl GameItem {
         self.item_search_category > 0
     }
 
+    /// 是否为房屋相关物品
+    pub fn is_housing(&self) -> bool {
+        self.filter_group == 14
+    }
+
     /// 是否为房屋外装物品
     pub fn is_housing_exterior(&self) -> bool {
         self.filter_group == 14
             && ExteriorPartType::from_ui_category(self.item_ui_category).is_some()
+    }
+
+    /// 是否为庭院家具 (ItemUICategory 73)
+    pub fn is_housing_yard(&self) -> bool {
+        self.filter_group == 14 && self.item_ui_category == 73
+    }
+
+    /// 是否为室内家具 (filter_group 14, 非外装非庭院)
+    pub fn is_housing_indoor(&self) -> bool {
+        self.filter_group == 14 && !self.is_housing_exterior() && !self.is_housing_yard()
+    }
+
+    /// 获取房屋子标签分类
+    pub fn housing_sub_tab(&self) -> Option<HousingSubTab> {
+        if !self.is_housing() {
+            return None;
+        }
+        if self.is_housing_exterior() {
+            Some(HousingSubTab::Exterior)
+        } else if self.is_housing_yard() {
+            Some(HousingSubTab::Yard)
+        } else {
+            Some(HousingSubTab::Indoor)
+        }
     }
 
     /// 获取房屋外装类型
@@ -461,10 +515,12 @@ pub struct Recipe {
     pub result_amount: u8,
     /// 制作职业 (0=CRP .. 7=CUL)
     pub craft_type: u8,
-    /// 配方等级 (链接到 RecipeLevelTable)
-    pub recipe_level: u16,
+    /// 配方等级表 ID (链接到 RecipeLevelTable)
+    pub recipe_level_table_id: u16,
     /// 素材列表: (item_id, amount)，已过滤掉 item_id==0 的空槽
     pub ingredients: Vec<(u32, u8)>,
+    /// 秘籍 ID (链接到 SecretRecipeBook 表，0 表示非秘籍配方)
+    pub secret_recipe_book: u32,
 }
 
 /// 合成树节点

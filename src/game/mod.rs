@@ -283,6 +283,110 @@ impl GameData {
         sgb_paths
     }
 
+    /// 加载 HousingFurniture 表的 SGB 路径映射 (室内家具)
+    /// 返回 Item.row_id -> SGB 路径 (通过表中的 Item 列反查)
+    pub fn load_housing_furniture_sgb_paths(&self) -> std::collections::HashMap<u32, String> {
+        let mut physis = self.physis.borrow_mut();
+
+        let exh = match physis.read_excel_sheet_header("HousingFurniture") {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("无法加载 HousingFurniture 表头: {}", e);
+                return std::collections::HashMap::new();
+            }
+        };
+        let sheet = match physis.read_excel_sheet(&exh, "HousingFurniture", Language::None) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("无法加载 HousingFurniture 表: {}", e);
+                return std::collections::HashMap::new();
+            }
+        };
+
+        // HousingFurniture 列布局:
+        // col[0] = ModelKey (UInt16)
+        // col[7] = Item (UInt32, 链接到 Item 表)
+        let mut sgb_paths: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
+        for page in &sheet.pages {
+            for (_row_id, row) in page.into_iter().flatten_subrows() {
+                let model_key = match row.columns.first() {
+                    Some(Field::UInt16(v)) => *v,
+                    Some(Field::UInt8(v)) => *v as u16,
+                    _ => continue,
+                };
+                if model_key == 0 {
+                    continue;
+                }
+                // col[7] = Item row_id
+                let item_id = match row.columns.get(7) {
+                    Some(Field::UInt32(v)) if *v > 0 => *v,
+                    Some(Field::Int32(v)) if *v > 0 => *v as u32,
+                    _ => continue,
+                };
+                let sgb = format!(
+                    "bgcommon/hou/indoor/general/{:04}/asset/fun_b0_m{:04}.sgb",
+                    model_key, model_key
+                );
+                sgb_paths.insert(item_id, sgb);
+            }
+        }
+        println!("HousingFurniture 表: {} 条有效记录", sgb_paths.len());
+        sgb_paths
+    }
+
+    /// 加载 HousingYardObject 表的 SGB 路径映射 (庭院家具)
+    /// 返回 Item.row_id -> SGB 路径 (通过表中的 Item 列反查)
+    pub fn load_housing_yard_sgb_paths(&self) -> std::collections::HashMap<u32, String> {
+        let mut physis = self.physis.borrow_mut();
+
+        let exh = match physis.read_excel_sheet_header("HousingYardObject") {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("无法加载 HousingYardObject 表头: {}", e);
+                return std::collections::HashMap::new();
+            }
+        };
+        let sheet = match physis.read_excel_sheet(&exh, "HousingYardObject", Language::None) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("无法加载 HousingYardObject 表: {}", e);
+                return std::collections::HashMap::new();
+            }
+        };
+
+        // HousingYardObject 列布局:
+        // col[0] = ModelKey (UInt16)
+        // col[6] = Item (UInt32, 链接到 Item 表)
+        let mut sgb_paths: std::collections::HashMap<u32, String> =
+            std::collections::HashMap::new();
+        for page in &sheet.pages {
+            for (_row_id, row) in page.into_iter().flatten_subrows() {
+                let model_key = match row.columns.first() {
+                    Some(Field::UInt16(v)) => *v,
+                    Some(Field::UInt8(v)) => *v as u16,
+                    _ => continue,
+                };
+                if model_key == 0 {
+                    continue;
+                }
+                // col[6] = Item row_id
+                let item_id = match row.columns.get(6) {
+                    Some(Field::UInt32(v)) if *v > 0 => *v,
+                    Some(Field::Int32(v)) if *v > 0 => *v as u32,
+                    _ => continue,
+                };
+                let sgb = format!(
+                    "bgcommon/hou/outdoor/general/{:04}/asset/gar_b0_m{:04}.sgb",
+                    model_key, model_key
+                );
+                sgb_paths.insert(item_id, sgb);
+            }
+        }
+        println!("HousingYardObject 表: {} 条有效记录", sgb_paths.len());
+        sgb_paths
+    }
+
     pub fn load_stain_list(&self) -> Vec<StainEntry> {
         let mut physis = self.physis.borrow_mut();
 
@@ -413,11 +517,13 @@ impl GameData {
         // col[5]: AmountResult (UInt8, 产出数量)
         // col[6..21]: Ingredient[0..7] 交错排列, 每对 (Int32 item_id, UInt8 amount)
         //   col[6]=Ing0_ID, col[7]=Ing0_Amt, col[8]=Ing1_ID, col[9]=Ing1_Amt, ...
+        // col[40]: SecretRecipeBook (Int32, 秘籍 ID，0 表示非秘籍)
         const COL_CRAFT_TYPE: usize = 1;
         const COL_RECIPE_LEVEL: usize = 2;
         const COL_ITEM_RESULT: usize = 4;
         const COL_AMOUNT_RESULT: usize = 5;
         const COL_INGREDIENT_START: usize = 6; // 每对占 2 列, 共 8 对
+        const COL_SECRET_RECIPE_BOOK: usize = 40;
 
         fn read_i32_as_u32(row: &Row, col: usize) -> u32 {
             match row.columns.get(col) {
@@ -476,13 +582,17 @@ impl GameData {
             return None;
         }
 
+        // 读取秘籍 ID
+        let secret_recipe_book = read_i32_as_u32(row, COL_SECRET_RECIPE_BOOK);
+
         Some(Recipe {
             row_id,
             result_item_id,
             result_amount,
             craft_type,
-            recipe_level,
+            recipe_level_table_id: recipe_level,
             ingredients,
+            secret_recipe_book,
         })
     }
 
@@ -860,5 +970,72 @@ impl GameData {
         }
         println!("GatheringItem: {} 种可采集物品", items.len());
         items
+    }
+
+    /// 加载 SecretRecipeBook 表, 返回多种键 -> 秘籍名称的映射
+    /// 键包括:
+    ///   - row_id (1-111)
+    ///   - item_id (秘籍物品ID)
+    ///   - recipe_col40_value (row_id + 546, 用于直接用 Recipe.col[40] 查找)
+    pub fn load_secret_recipe_book_names(&self) -> std::collections::HashMap<u32, String> {
+        let mut physis = self.physis.borrow_mut();
+        let exh = match physis.read_excel_sheet_header("SecretRecipeBook") {
+            Ok(h) => h,
+            Err(_) => return std::collections::HashMap::new(),
+        };
+        let sheet =
+            match physis.read_excel_sheet(&exh, "SecretRecipeBook", Language::ChineseSimplified) {
+                Ok(s) => s,
+                Err(_) => return std::collections::HashMap::new(),
+            };
+
+        let mut map = std::collections::HashMap::new();
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                // SecretRecipeBook 表: col[0] = Item (Int32), col[1] = Name (String)
+                if let (Some(Field::Int32(item_id)), Some(Field::String(name))) =
+                    (row.columns.first(), row.columns.get(1))
+                {
+                    if !name.is_empty() && *item_id > 0 {
+                        // 使用 row_id 作为键
+                        map.insert(row_id, name.clone());
+                        // 使用 item_id 作为键（反向映射）
+                        map.insert(*item_id as u32, name.clone());
+                        // 使用 Recipe.col[40] 值作为键 (row_id + 546)
+                        // 国服只有第一卷(row_id 1-8)的配方在 Recipe.col[40] 中被标记(值 547-554)
+                        map.insert(row_id + 546, name.clone());
+                    }
+                }
+            }
+        }
+        println!("SecretRecipeBook: {} 条秘籍记录（含反向映射和Recipe.col40映射）", map.len());
+        map
+    }
+
+    /// 加载 RecipeLevelTable 表, 返回 row_id -> 配方等级
+    pub fn load_recipe_level_table(&self) -> std::collections::HashMap<u16, u8> {
+        let mut physis = self.physis.borrow_mut();
+        let exh = match physis.read_excel_sheet_header("RecipeLevelTable") {
+            Ok(h) => h,
+            Err(_) => return std::collections::HashMap::new(),
+        };
+        let sheet =
+            match physis.read_excel_sheet(&exh, "RecipeLevelTable", Language::None) {
+                Ok(s) => s,
+                Err(_) => return std::collections::HashMap::new(),
+            };
+        let mut map = std::collections::HashMap::new();
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                // RecipeLevelTable 表: col[0] = ClassJobLevel (UInt8, 配方所需职业等级)
+                if let Some(Field::UInt8(level)) = row.columns.first() {
+                    if *level > 0 && row_id <= u16::MAX as u32 {
+                        map.insert(row_id as u16, *level);
+                    }
+                }
+            }
+        }
+        println!("RecipeLevelTable: {} 条等级记录", map.len());
+        map
     }
 }

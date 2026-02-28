@@ -503,3 +503,223 @@ MDL  chara/equipment/e{set_id}/model/{race}e{set_id}_{slot}.mdl
  ├── ironworks (优先) — 支持国服, 但不认识 Dawntrail v6 MDL
  └── physis (回退) — 支持 v6 格式, 但需修补 Region 枚举
 ```
+
+---
+
+## SGB 场景容器格式 (Scene Group Binary)
+
+SGB 是 FF14 的场景容器文件，用于定义一组场景对象（模型、光源、特效、NPC 等）的布局。房屋系统（家具、庭院物品、房屋外装）的模型都通过 SGB 文件间接引用 MDL。
+
+### 用途
+
+- 房屋家具/庭院物品/外装的模型容器
+- 场景地图 (bg/) 中的物件组合
+- 可嵌套引用其他 SGB 文件（通过 SharedGroup 条目）
+
+### 数据链路
+
+```
+Item 表
+ ├── AdditionalData → HousingFurniture  → ModelKey → SGB → MDL
+ ├── AdditionalData → HousingYardObject → ModelKey → SGB → MDL
+ └── AdditionalData → HousingExterior   → Model   → SGB → MDL
+```
+
+### SGB 路径格式
+
+| 类型 | 路径模式 |
+|------|---------|
+| 室内家具 | `bgcommon/hou/indoor/general/{ModelKey:04}/asset/fun_b0_m{ModelKey:04}.sgb` |
+| 庭院物品 | `bgcommon/hou/outdoor/general/{ModelKey:04}/asset/gar_b0_m{ModelKey:04}.sgb` |
+| 房屋外装 | `bgcommon/hou/outdoor/general/{Model:04}/asset/gar_b0_m{Model:04}.sgb` |
+| 水族箱鱼 (小) | `bgcommon/hou/indoor/gyo/sm/{id:04}/asset/fsh_sm_m{id:04}.sgb` |
+| 水族箱鱼 (中) | `bgcommon/hou/indoor/gyo/mi/{id:04}/asset/fsh_mi_m{id:04}.sgb` |
+| 水族箱鱼 (大) | `bgcommon/hou/indoor/gyo/la/{id:04}/asset/fsh_la_m{id:04}.sgb` |
+| 水族箱鱼 (特大) | `bgcommon/hou/indoor/gyo/ll/{id:04}/asset/fsh_ll_m{id:04}.sgb` |
+
+### 完整文件结构
+
+SGB 文件由文件头 + 场景块 (SceneChunk) 组成，场景块内包含层组 (LayerGroup) → 层 (Layer) → 实例对象 (InstanceObject) 的树形结构。
+
+```
+SGB 文件
+ ├── FileHeader (12 bytes)
+ │   ├── char[4]  magic = "SGB1"
+ │   ├── i32      file_size
+ │   └── i32      total_chunk_count
+ │
+ └── SceneChunk
+     ├── char[4]  chunk_id (如 "SCN1")
+     ├── i32      chunk_size
+     ├── i32      layer_group_offset    ← 相对于 chunk 数据区起始
+     ├── i32      layer_group_count
+     ├── i32[10]  unknown (Unknown10..Unknown30)
+     ├── i32      housing_offset        ← 非零时指向 HousingSettings
+     ├── i32      unknown38
+     ├── i32[3]   padding
+     │
+     ├── LayerGroup[] (在 layer_group_offset 处)
+     │   ├── u32      layer_group_id
+     │   ├── i32      name              ← 字符串偏移
+     │   ├── i32      layer_offsets_start
+     │   ├── i32      layer_count
+     │   │
+     │   └── Layer[] (通过偏移表间接定位)
+     │       ├── u32      layer_id
+     │       ├── i32      name          ← 字符串偏移
+     │       ├── i32      instance_objects_offset
+     │       ├── i32      instance_object_count
+     │       ├── u8       tool_mode_visible
+     │       ├── u8       tool_mode_read_only
+     │       ├── u8       is_bush_layer
+     │       ├── u8       ps3_visible
+     │       ├── i32      layer_set_referenced_list
+     │       ├── u16      festival_id
+     │       ├── u16      festival_phase_id
+     │       ├── u8       is_temporary
+     │       ├── u8       is_housing     ← 房屋相关层标志
+     │       ├── u16      version_mask
+     │       ├── ...      其他引用列表
+     │       │
+     │       └── InstanceObject[] (通过偏移表间接定位)
+     │           ├── i32   asset_type    ← LayerEntryType 枚举
+     │           ├── u32   instance_id
+     │           ├── i32   name          ← 字符串偏移
+     │           ├── Transformation      ← 位置/旋转/缩放 (36 bytes)
+     │           └── [类型特定数据]       ← 根据 asset_type 决定
+     │
+     └── HousingSettings (可选, 在 housing_offset 处)
+         ├── u16      default_color_id   ← 默认染色 ID
+         └── ...      其他未知字段
+```
+
+### LayerEntryType 枚举 (实例对象类型)
+
+| 值 | 名称 | 说明 | 包含资源路径 |
+|----|------|------|-------------|
+| 0x01 | BG | 背景模型 | `.mdl` 路径 + 碰撞路径 |
+| 0x03 | LayLight | 光源 | 纹理路径 (可选) |
+| 0x04 | VFX | 视觉特效 | `.avfx` 路径 |
+| 0x05 | PositionMarker | 位置标记 | 无 |
+| 0x06 | SharedGroup | 共享组 (嵌套 SGB) | `.sgb` 路径 |
+| 0x07 | Sound | 音效 | 音效路径 |
+| 0x08 | EventNPC | 事件 NPC | 无 (通过 BaseId 引用) |
+| 0x09 | BattleNPC | 战斗 NPC | 无 (通过 BaseId 引用) |
+| 0x0C | Aetheryte | 以太之光 | 无 |
+| 0x0D | EnvSet | 环境设置 | 环境资源路径 |
+| 0x10 | Treasure | 宝箱 | 无 |
+| 0x28 | PopRange | 刷新范围 | 无 |
+| 0x29 | ExitRange | 出口范围 | 无 |
+| 0x2B | MapRange | 地图范围 | 无 |
+| 0x2D | EventObject | 事件对象 | 无 |
+| 0x31 | EventRange | 事件范围 | 无 |
+| 0x39 | CollisionBox | 碰撞盒 | 碰撞资源路径 |
+| 0x41 | ClientPath | 客户端路径 | 无 |
+| 0x42 | ServerPath | 服务端路径 | 无 |
+| 0x43 | GimmickRange | 机关范围 | 无 |
+| 0x44 | TargetMarker | 目标标记 | 无 |
+| 0x45 | ChairMarker | 座椅标记 | 无 |
+| 0x47 | PrefetchRange | 预加载范围 | 无 |
+| 0x48 | FateRange | FATE 范围 | 无 |
+
+### BG 实例对象 (模型引用)
+
+对于房屋模型提取，最关键的是 `BG` 类型 (0x01) 的实例对象:
+
+```
+BGInstanceObject:
+  i32   asset_path           ← 字符串偏移 → .mdl 模型路径
+  i32   collision_asset_path ← 字符串偏移 → 碰撞模型路径
+  i32   collision_type
+  u32   attribute_mask
+  u32   attribute
+  i32   collision_config
+  u8    is_visible
+  u8    render_shadow_enabled
+  u8    render_light_shadow_enabled
+  u8    padding
+  f32   render_model_clip_range
+```
+
+### SharedGroup 实例对象 (嵌套 SGB)
+
+`SharedGroup` 类型 (0x06) 引用另一个 SGB 文件，形成树形结构:
+
+```
+SharedGroupInstanceObject:
+  i32   asset_path           ← 字符串偏移 → .sgb 路径
+  i32   initial_door_state
+  i32   overridden_members
+  i32   overridden_members_count
+  i32   initial_rotation_state
+  ...   其他状态字段
+```
+
+解析时需要递归处理: 遇到 SharedGroup 条目时，加载其引用的 SGB 文件并继续提取模型。
+
+### 字符串区域 (简化解析方式)
+
+SGB 文件中所有路径字符串集中存储在一个区域，以 null (`0x00`) 分隔，以 `0xFF` 标记结束。
+
+当前项目使用简化方式直接扫描字符串区域，而非解析完整的层级结构:
+
+```
+定位字符串区域:
+  1. 读取偏移 0x14 处的 i32 → skip
+  2. 跳转到 (skip + 20 + 4)
+  3. 读取 i32 → strings_offset
+  4. 字符串区域起始 = (skip + 20) + strings_offset
+
+扫描字符串:
+  循环读取 null 分隔的字符串:
+    - 遇到 0x00 → 当前字符串结束
+    - 遇到 0xFF → 整个区域结束
+    - 筛选 .mdl 结尾的路径 → 模型文件
+    - 筛选 .sgb 结尾的路径 → 嵌套 SGB (需递归)
+```
+
+这种方式足以提取房屋模型路径，无需解析完整的层/实例对象结构。
+
+> 参考实现:
+> - [TexTools Housing.cs GetAdditionalAssets()](https://github.com/TexTools/xivModdingFramework/blob/master/xivModdingFramework/Items/Categories/Housing.cs) — 字符串扫描方式
+> - [TexTools Sgb.cs](https://github.com/TexTools/xivModdingFramework/blob/master/xivModdingFramework/World/Sgb.cs) — 完整结构解析
+> - [Lumina SgbFile.cs](https://github.com/NotAdam/Lumina/blob/master/src/Lumina/Data/Files/SgbFile.cs) — 完整结构解析
+> - [Lumina LayerCommon.cs](https://github.com/NotAdam/Lumina/blob/master/src/Lumina/Data/Parsing/Layer/LayerCommon.cs) — 实例对象类型定义
+
+### 房屋模型完整链路示例
+
+以室内家具 "木制阁楼床" (假设 ModelKey=0142) 为例:
+
+```
+Step 1: 从 Item 表读取行
+  ├── Name = "木制阁楼床"
+  ├── FilterGroup = 14              ← 房屋物品
+  ├── AdditionalData = 85           ← HousingFurniture 行 ID
+  └── ItemUICategory = 57           ← 桌 (室内家具)
+
+Step 2: 从 HousingFurniture 表读取行 85
+  └── ModelKey = 142                ← 家具模型 ID
+
+Step 3: 构建 SGB 路径
+  bgcommon/hou/indoor/general/0142/asset/fun_b0_m0142.sgb
+
+Step 4: 读取 SGB → 扫描字符串区域 → 提取 MDL 路径
+  [
+    "bgcommon/hou/indoor/general/0142/bgparts/fun_b0_m0142_a.mdl",
+    "bgcommon/hou/indoor/general/0142/bgparts/fun_b0_m0142_b.mdl",
+  ]
+
+Step 5: 加载所有 MDL → 合并网格 → 渲染
+```
+
+### 当前 tomestone 的 SGB 实现
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 字符串扫描提取 MDL 路径 | ✅ 已实现 | `sgb.rs: extract_mdl_paths_from_sgb()` |
+| 室内家具 SGB 路径构建 | ✅ 已实现 | `game_data.rs: load_housing_furniture_sgb_paths()` |
+| 庭院物品 SGB 路径构建 | ✅ 已实现 | `game_data.rs: load_housing_yard_sgb_paths()` |
+| 房屋外装 SGB 路径构建 | ✅ 已实现 | `game_data.rs: load_housing_sgb_paths()` |
+| 嵌套 SGB 递归解析 | ❌ 未实现 | 部分家具由多个 SGB 组合 |
+| 完整层级结构解析 | ❌ 未实现 | 仅使用字符串扫描简化方式 |
+| HousingSettings 解析 | ❌ 未实现 | 包含默认染色 ID 等信息 |

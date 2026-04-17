@@ -17,6 +17,7 @@ use crate::ui::components::equipment_list::EquipmentListState;
 use crate::ui::components::item_list::ItemListState;
 use crate::ui::components::viewport::ViewportState;
 use crate::ui::components::{show_progress_bar, ProgressTracker};
+use crate::ui::pages::gil_tracker::GilTrackerState;
 
 pub enum AppPhase {
     Setup {
@@ -84,11 +85,22 @@ pub struct App {
     pub auto_craft: crate::ui::pages::toolbox::AutoCraftUi,
     // 工具箱: 模板编辑器
     pub template_editor: crate::ui::components::template_editor::TemplateEditorState,
+    // 金币追踪
+    pub gil_tracker: GilTrackerState,
 }
 
 impl App {
     pub fn new(render_state: egui_wgpu::RenderState) -> Self {
         let config = config::load_config();
+        let gil_tracker_dir = config
+            .gil_tracker_dir
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                std::env::var("USERPROFILE")
+                    .map(|p| format!("{}\\Documents\\GilTracker", p))
+                    .unwrap_or_default()
+            });
         let viewport = ViewportState::new(render_state.clone());
         let housing_viewport = ViewportState::new(render_state.clone());
 
@@ -158,6 +170,10 @@ impl App {
             crafting_source_overrides: HashMap::new(),
             auto_craft: Default::default(),
             template_editor: Default::default(),
+            gil_tracker: GilTrackerState {
+                data_dir: gil_tracker_dir,
+                ..Default::default()
+            },
         }
     }
 
@@ -303,6 +319,11 @@ impl App {
                     crate::domain::AppPage::ResourceBrowser,
                     "EXD 浏览器",
                 );
+                ui.selectable_value(
+                    &mut self.current_page,
+                    crate::domain::AppPage::GilTracker,
+                    "金币追踪",
+                );
                 ui.selectable_value(&mut self.current_page, crate::domain::AppPage::Test, "测试");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("设置").clicked() {
@@ -332,6 +353,7 @@ impl App {
             crate::domain::AppPage::CraftingBrowser => self.show_crafting_page(ctx, gs),
             crate::domain::AppPage::Toolbox => self.show_toolbox_page(ctx),
             crate::domain::AppPage::ResourceBrowser => gs.resource_browser.show(ctx, &gs.game),
+            crate::domain::AppPage::GilTracker => self.show_gil_tracker_page(ctx),
             crate::domain::AppPage::Test => self.show_test_page(ctx),
         }
     }

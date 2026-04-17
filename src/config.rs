@@ -2,9 +2,23 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 pub struct AppConfig {
     pub game_install_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub gil_tracker_dir: Option<PathBuf>,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        let gil_tracker_dir = std::env::var("USERPROFILE")
+            .ok()
+            .map(|p| PathBuf::from(p).join("Documents").join("GilTracker"));
+        Self {
+            game_install_dir: None,
+            gil_tracker_dir,
+        }
+    }
 }
 
 pub fn config_path() -> PathBuf {

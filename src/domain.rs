@@ -10,6 +10,7 @@ pub enum AppPage {
     CraftingBrowser,
     Toolbox,
     ResourceBrowser,
+    GilTracker,
     Test,
 }
 

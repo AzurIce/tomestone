@@ -3,6 +3,7 @@ pub mod crafting;
 pub mod gil_tracker;
 pub mod glamour;
 pub mod housing;
+pub mod region_debug;
 pub mod resource;
 pub mod setup;
 pub mod toolbox;

@@ -1,13 +1,15 @@
 use auto_play::MatcherOptions;
 use image::DynamicImage;
 
-use crate::config;
+use crate::template_images::TemplateImages;
 
 /// 编译时模板定义（每个工具用 const 数组定义自己的模板集）
 pub struct TemplateDef {
+    /// 显示名称
     pub name: &'static str,
-    pub filename: &'static str,
-    pub default_bytes: &'static [u8],
+    /// 模板标识符（对应 assets/templates/ 下的文件名，不含后缀）
+    pub id: &'static str,
+    /// 匹配阈值
     pub threshold: f32,
 }
 
@@ -20,38 +22,28 @@ pub struct TemplateInstance {
 }
 
 impl TemplateInstance {
-    pub fn load(def: &'static TemplateDef) -> Self {
-        let templates_dir = config::templates_dir();
-        let user_path = templates_dir.join(def.filename);
-        if let Ok(img) = image::open(&user_path) {
-            return Self {
-                def,
-                image: img,
-                is_custom: true,
-            };
-        }
-        let img = image::load_from_memory(def.default_bytes)
-            .unwrap_or_else(|_| panic!("无法加载默认模板: {}", def.filename));
+    pub fn load(def: &'static TemplateDef, images: &TemplateImages) -> Self {
+        let img = images.get_expect(def.id);
+        let is_custom = images.is_custom(def.id);
         Self {
             def,
             image: img,
-            is_custom: false,
+            is_custom,
         }
     }
 
-    pub fn reset_to_default(&mut self) {
-        let templates_dir = config::templates_dir();
-        let user_path = templates_dir.join(self.def.filename);
-        let _ = std::fs::remove_file(&user_path);
-        self.image = image::load_from_memory(self.def.default_bytes)
-            .unwrap_or_else(|_| panic!("无法加载默认模板: {}", self.def.filename));
+    pub fn reset_to_default(&mut self, images: &TemplateImages) {
+        images.remove_custom(self.def.id);
+        self.image = images.get_expect(self.def.id);
         self.is_custom = false;
     }
 
-    pub fn save_custom(&mut self, img: DynamicImage) -> anyhow::Result<()> {
-        let templates_dir = config::templates_dir();
-        let path = templates_dir.join(self.def.filename);
-        img.save(&path)?;
+    pub fn save_custom(
+        &mut self,
+        images: &TemplateImages,
+        img: DynamicImage,
+    ) -> anyhow::Result<()> {
+        images.save_custom(self.def.id, img.clone())?;
         self.image = img;
         self.is_custom = true;
         Ok(())
@@ -65,12 +57,13 @@ impl TemplateInstance {
 /// 模板集（一个工具的所有模板）
 #[derive(Clone)]
 pub struct TemplateSet {
+    pub images: TemplateImages,
     pub templates: Vec<TemplateInstance>,
 }
 
 impl TemplateSet {
-    pub fn load(defs: &'static [TemplateDef]) -> Self {
-        let templates = defs.iter().map(TemplateInstance::load).collect();
-        Self { templates }
+    pub fn load(images: TemplateImages, defs: &'static [TemplateDef]) -> Self {
+        let templates = defs.iter().map(|def| TemplateInstance::load(def, &images)).collect();
+        Self { images, templates }
     }
 }

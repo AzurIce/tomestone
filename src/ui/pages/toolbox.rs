@@ -1,14 +1,11 @@
-use std::sync::mpsc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::Arc;
 
-use auto_play::MatcherOptions;
+use ap_xiv::auto_craft::{AutoCraft, AutoCraftConfig, AutoCraftEvent, AutoCraftHandle, CraftTemplates};
+use auto_play::{MatchDefinition, MatcherOptions};
 use eframe::egui;
 
 use crate::app::App;
-use crate::auto_craft::{self, CraftMessage, CraftTemplates};
+use crate::app_templates::{AC_TPL_START, AC_TPL_STOP, AUTO_CRAFT_TEMPLATES};
 use crate::template::TemplateSet;
 
 #[derive(Default, Clone, Copy, PartialEq)]
@@ -23,10 +20,7 @@ pub enum AutoCraftState {
     /// 空闲
     Idle,
     /// 运行中
-    Running {
-        receiver: mpsc::Receiver<CraftMessage>,
-        cancel: Arc<AtomicBool>,
-    },
+    Running(AutoCraftHandle),
 }
 
 /// 自动制作工具的 UI 状态
@@ -73,14 +67,14 @@ impl App {
                     self.show_auto_craft_content(ui);
                 }
                 ToolboxTab::TemplateEditor => {
-                    self.template_editor.ensure_loaded(auto_craft::TEMPLATES);
+                    self.template_editor.ensure_loaded(AUTO_CRAFT_TEMPLATES);
                     self.template_editor.show_inline(ui, ctx);
                 }
             }
 
             self.poll_auto_craft_messages();
 
-            if matches!(self.auto_craft.state, AutoCraftState::Running { .. }) {
+            if matches!(self.auto_craft.state, AutoCraftState::Running(..)) {
                 ctx.request_repaint();
             }
         });
@@ -98,7 +92,7 @@ impl App {
             );
             ui.add_space(4.0);
 
-            let is_running = matches!(self.auto_craft.state, AutoCraftState::Running { .. });
+            let is_running = matches!(self.auto_craft.state, AutoCraftState::Running(..));
 
             ui.horizontal(|ui| {
                 ui.label("制作次数:");
@@ -122,8 +116,8 @@ impl App {
                         .button(format!("{} 停止", egui_phosphor::regular::STOP_CIRCLE))
                         .clicked()
                     {
-                        if let AutoCraftState::Running { ref cancel, .. } = self.auto_craft.state {
-                            cancel.store(true, Ordering::Relaxed);
+                        if let AutoCraftState::Running(ref handle) = self.auto_craft.state {
+                            handle.stop();
                         }
                     }
                 } else if ui
@@ -173,42 +167,48 @@ impl App {
             .template_editor
             .template_set()
             .cloned()
-            .unwrap_or_else(|| TemplateSet::load(auto_craft::TEMPLATES));
+            .unwrap_or_else(|| TemplateSet::load(Default::default(), AUTO_CRAFT_TEMPLATES));
 
-        let start_img = tpl_set.templates[auto_craft::TPL_START].image.clone();
-        let stop_img = tpl_set.templates[auto_craft::TPL_STOP].image.clone();
-        let start_threshold = tpl_set.templates[auto_craft::TPL_START].def.threshold;
-        let stop_threshold = tpl_set.templates[auto_craft::TPL_STOP].def.threshold;
+        let start_img = tpl_set.templates[AC_TPL_START].image.clone();
+        let stop_img = tpl_set.templates[AC_TPL_STOP].image.clone();
+        let start_threshold = tpl_set.templates[AC_TPL_START].def.threshold;
+        let stop_threshold = tpl_set.templates[AC_TPL_STOP].def.threshold;
 
         let templates = CraftTemplates {
-            start: start_img,
-            stop: stop_img,
-            options: MatcherOptions::default().with_threshold(stop_threshold),
-            options_strict: MatcherOptions::default().with_threshold(start_threshold),
+            start: MatchDefinition::new(
+                MatcherOptions::default().with_threshold(start_threshold),
+                Arc::new(start_img),
+            ),
+            stop: MatchDefinition::new(
+                MatcherOptions::default().with_threshold(stop_threshold),
+                Arc::new(stop_img),
+            ),
         };
 
         self.auto_craft.progress = (0, count);
         self.auto_craft.status = "启动中...".to_string();
         self.auto_craft.log.clear();
 
-        let (tx, rx) = mpsc::channel();
-        let cancel = Arc::new(AtomicBool::new(false));
-        let cancel_clone = cancel.clone();
-
-        std::thread::spawn(move || {
-            auto_craft::run_auto_craft(count, macro_key, templates, tx, cancel_clone);
-        });
-
-        self.auto_craft.state = AutoCraftState::Running {
-            receiver: rx,
-            cancel,
-        };
+        match AutoCraft::start(AutoCraftConfig {
+            count,
+            macro_key,
+            templates,
+        }) {
+            Ok(handle) => {
+                self.auto_craft.state = AutoCraftState::Running(handle);
+            }
+            Err(e) => {
+                let line = format!("启动失败: {}", e);
+                self.auto_craft.status = line.clone();
+                self.auto_craft.log.push(line);
+            }
+        }
     }
 
     fn poll_auto_craft_messages(&mut self) {
-        let messages: Vec<CraftMessage> =
-            if let AutoCraftState::Running { ref receiver, .. } = self.auto_craft.state {
-                receiver.try_iter().collect()
+        let messages: Vec<AutoCraftEvent> =
+            if let AutoCraftState::Running(ref handle) = self.auto_craft.state {
+                handle.receiver.try_iter().collect()
             } else {
                 return;
             };
@@ -216,14 +216,14 @@ impl App {
         let mut finished = false;
         for msg in messages {
             match msg {
-                CraftMessage::Status(s) => {
+                AutoCraftEvent::Status(s) => {
                     self.auto_craft.status = s.clone();
                     self.auto_craft.log.push(s);
                 }
-                CraftMessage::Progress(done, total) => {
+                AutoCraftEvent::Progress(done, total) => {
                     self.auto_craft.progress = (done, total);
                 }
-                CraftMessage::CraftDone {
+                AutoCraftEvent::CraftDone {
                     index,
                     elapsed_secs,
                 } => {
@@ -231,19 +231,19 @@ impl App {
                     self.auto_craft.status = line.clone();
                     self.auto_craft.log.push(line);
                 }
-                CraftMessage::CraftFailed { index, reason } => {
+                AutoCraftEvent::CraftFailed { index, reason } => {
                     let line = format!("#{} 失败: {}", index, reason);
                     self.auto_craft.status = line.clone();
                     self.auto_craft.log.push(line);
                     finished = true;
                 }
-                CraftMessage::Finished { success, total } => {
+                AutoCraftEvent::Finished { success, total } => {
                     let line = format!("完成: {}/{} 成功", success, total);
                     self.auto_craft.status = line.clone();
                     self.auto_craft.log.push(line);
                     finished = true;
                 }
-                CraftMessage::Error(e) => {
+                AutoCraftEvent::Error(e) => {
                     let line = format!("错误: {}", e);
                     self.auto_craft.status = line.clone();
                     self.auto_craft.log.push(line);

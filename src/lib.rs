@@ -1,5 +1,5 @@
 mod app;
-mod auto_craft;
+mod app_templates;
 mod config;
 mod domain;
 mod dye;
@@ -8,7 +8,9 @@ pub mod game;
 mod glamour;
 mod loading;
 mod schema;
+mod screen_region;
 mod template;
+mod template_images;
 pub mod ui;
 
 pub use app::App;

@@ -11,6 +11,7 @@ pub enum AppPage {
     Toolbox,
     ResourceBrowser,
     GilTracker,
+    RegionDebug,
     Test,
 }
 

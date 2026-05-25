@@ -18,6 +18,7 @@ use crate::ui::components::item_list::ItemListState;
 use crate::ui::components::viewport::ViewportState;
 use crate::ui::components::{show_progress_bar, ProgressTracker};
 use crate::ui::pages::gil_tracker::GilTrackerState;
+use crate::ui::pages::region_debug::RegionDebugState;
 
 pub enum AppPhase {
     Setup {
@@ -87,6 +88,8 @@ pub struct App {
     pub template_editor: crate::ui::components::template_editor::TemplateEditorState,
     // 金币追踪
     pub gil_tracker: GilTrackerState,
+    // 区域调试
+    pub region_debug: RegionDebugState,
 }
 
 impl App {
@@ -170,6 +173,7 @@ impl App {
             crafting_source_overrides: HashMap::new(),
             auto_craft: Default::default(),
             template_editor: Default::default(),
+            region_debug: Default::default(),
             gil_tracker: GilTrackerState {
                 data_dir: gil_tracker_dir,
                 ..Default::default()
@@ -324,6 +328,11 @@ impl App {
                     crate::domain::AppPage::GilTracker,
                     "金币追踪",
                 );
+                ui.selectable_value(
+                    &mut self.current_page,
+                    crate::domain::AppPage::RegionDebug,
+                    "区域调试",
+                );
                 ui.selectable_value(&mut self.current_page, crate::domain::AppPage::Test, "测试");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("设置").clicked() {
@@ -354,6 +363,7 @@ impl App {
             crate::domain::AppPage::Toolbox => self.show_toolbox_page(ctx),
             crate::domain::AppPage::ResourceBrowser => gs.resource_browser.show(ctx, &gs.game),
             crate::domain::AppPage::GilTracker => self.show_gil_tracker_page(ctx),
+            crate::domain::AppPage::RegionDebug => self.show_region_debug_page(ctx),
             crate::domain::AppPage::Test => self.show_test_page(ctx),
         }
     }

@@ -1,0 +1,9 @@
+[package]
+name = "ap-xiv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+auto-play = { git = "https://github.com/AzurIce/auto-play", features = ["windows"] }
+image = "0.25"
+anyhow = "1"

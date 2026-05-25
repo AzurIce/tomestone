@@ -29,6 +29,7 @@ rfd = "0.15"
 open = "5"
 egui-phosphor = { version = "0.11", features = ["regular", "fill"] }
 auto-play = { git = "https://github.com/AzurIce/auto-play", features = ["windows"] }
+ap-xiv = { path = "packages/ap-xiv" }
 image = "0.25"
 anyhow = "1"
 

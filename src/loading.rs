@@ -62,6 +62,18 @@ pub struct GameState {
     pub item_sources: HashMap<u32, Vec<ItemSource>>,
     /// ItemUICategory row_id -> 分类名称
     pub ui_category_names: HashMap<u8, String>,
+
+    // ── 消耗品 ──
+    /// 食物/药品物品在 all_items 中的下标
+    pub consumable_indices: Vec<usize>,
+    /// 按类型分组的食物/药品下标
+    pub consumable_by_type: [Vec<usize>; 2],
+    /// ItemFood row_id -> 效果详情
+    pub item_food: std::collections::HashMap<u32, crate::domain::ConsumableInfo>,
+    /// ItemAction row_id -> (ItemFood row_id, ItemFood HQ row_id)
+    pub item_actions: std::collections::HashMap<u32, (u32, u32)>,
+    /// item_id -> ItemFood row_id (通过 ItemAction 间接关联)
+    pub item_to_food: std::collections::HashMap<u32, u32>,
 }
 
 pub enum LoadProgress {
@@ -88,6 +100,10 @@ pub struct LoadedData {
     pub secret_recipe_book_names: HashMap<u32, String>,
     /// RecipeLevelTable row_id -> 配方等级
     pub recipe_levels: HashMap<u16, u8>,
+    /// 消耗品效果: ItemFood row_id -> ConsumableInfo
+    pub item_food: std::collections::HashMap<u32, crate::domain::ConsumableInfo>,
+    /// ItemAction row_id -> (ItemFood row_id, ItemFood HQ row_id)
+    pub item_actions: std::collections::HashMap<u32, (u32, u32)>,
 }
 
 pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<LoadProgress>) {
@@ -130,6 +146,11 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
     let special_shop_sources = game.load_special_shop_sources();
     let gathering_items = game.load_gathering_items();
 
+    let _ = tx.send(LoadProgress::Status("正在加载消耗品效果数据...".to_string()));
+    let base_param_names = game.load_base_param_names();
+    let item_food = game.load_item_food(&base_param_names);
+    let item_actions = game.load_item_actions();
+
     let _ = tx.send(LoadProgress::Done(Box::new(LoadedData {
         game,
         all_items,
@@ -146,6 +167,8 @@ pub fn load_game_data_thread(install_dir: PathBuf, tx: std::sync::mpsc::Sender<L
         gathering_items,
         secret_recipe_book_names,
         recipe_levels,
+        item_food,
+        item_actions,
     })));
 }
 
@@ -270,8 +293,35 @@ impl GameState {
             sources.retain(|s| seen.insert(s.cost_key()));
         }
 
+        // 构建消耗品索引
+        let mut consumable_indices = Vec::new();
+        let mut consumable_by_type: [Vec<usize>; 2] = Default::default();
+        for (idx, item) in data.all_items.iter().enumerate() {
+            if let Some(ct) = item.consumable_type() {
+                consumable_indices.push(idx);
+                let type_idx = match ct {
+                    crate::domain::ConsumableType::Food => 0,
+                    crate::domain::ConsumableType::Medicine => 1,
+                };
+                consumable_by_type[type_idx].push(idx);
+            }
+        }
+
+        // 构建 item_id -> ItemFood row_id 映射 (通过 ItemAction 间接关联)
+        let mut item_to_food: std::collections::HashMap<u32, u32> =
+            std::collections::HashMap::new();
+        for &idx in &consumable_indices {
+            let item = &data.all_items[idx];
+            if item.item_action > 0 {
+                if let Some(&(food_id, _)) = data.item_actions.get(&item.item_action) {
+                    item_to_food.insert(item.row_id, food_id);
+                }
+            }
+        }
+        println!("ItemFood 关联: {} 个消耗品有效果", item_to_food.len());
+
         println!(
-            "物品总数: {}, 装备: {}, 房屋外装: {}, 庭院家具: {}, 室内家具: {}, 配方: {}, 有来源物品: {}",
+            "物品总数: {}, 装备: {}, 房屋外装: {}, 庭院家具: {}, 室内家具: {}, 配方: {}, 有来源物品: {}, 消耗品: {}(食物{}+药品{})",
             data.all_items.len(),
             equipment_indices.len(),
             housing_ext_indices.len(),
@@ -279,6 +329,9 @@ impl GameState {
             housing_indoor_indices.len(),
             data.recipes.len(),
             item_sources.len(),
+            consumable_indices.len(),
+            consumable_by_type[0].len(),
+            consumable_by_type[1].len(),
         );
 
         Self {
@@ -305,6 +358,11 @@ impl GameState {
             ui_category_names: data.ui_category_names,
             secret_recipe_book_names: data.secret_recipe_book_names,
             recipe_levels: data.recipe_levels,
+            consumable_indices,
+            consumable_by_type,
+            item_food: data.item_food,
+            item_actions: data.item_actions,
+            item_to_food,
         }
     }
 }

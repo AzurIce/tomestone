@@ -90,6 +90,8 @@ pub struct App {
     pub gil_tracker: GilTrackerState,
     // 区域调试
     pub region_debug: RegionDebugState,
+    // 消耗品浏览器
+    pub consumables: crate::ui::pages::consumables::ConsumablesState,
 }
 
 impl App {
@@ -178,6 +180,7 @@ impl App {
                 data_dir: gil_tracker_dir,
                 ..Default::default()
             },
+            consumables: Default::default(),
         }
     }
 
@@ -315,6 +318,11 @@ impl App {
                 );
                 ui.selectable_value(
                     &mut self.current_page,
+                    crate::domain::AppPage::ConsumablesBrowser,
+                    "消耗品",
+                );
+                ui.selectable_value(
+                    &mut self.current_page,
                     crate::domain::AppPage::Toolbox,
                     "工具箱",
                 );
@@ -360,6 +368,7 @@ impl App {
             crate::domain::AppPage::GlamourManager => self.show_glamour_manager_page(ctx, gs),
             crate::domain::AppPage::HousingBrowser => self.show_housing_page(ctx, gs),
             crate::domain::AppPage::CraftingBrowser => self.show_crafting_page(ctx, gs),
+            crate::domain::AppPage::ConsumablesBrowser => self.show_consumables_page(ctx, gs),
             crate::domain::AppPage::Toolbox => self.show_toolbox_page(ctx),
             crate::domain::AppPage::ResourceBrowser => gs.resource_browser.show(ctx, &gs.game),
             crate::domain::AppPage::GilTracker => self.show_gil_tracker_page(ctx),

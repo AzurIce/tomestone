@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod consumables;
 pub mod crafting;
 pub mod gil_tracker;
 pub mod glamour;

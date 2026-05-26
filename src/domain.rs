@@ -8,6 +8,7 @@ pub enum AppPage {
     GlamourManager,
     HousingBrowser,
     CraftingBrowser,
+    ConsumablesBrowser,
     Toolbox,
     ResourceBrowser,
     GilTracker,
@@ -94,6 +95,52 @@ pub const EXTERIOR_PART_TYPES: [ExteriorPartType; 8] = [
     ExteriorPartType::Placard,
     ExteriorPartType::Fence,
 ];
+
+// ── 消耗品 ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsumableType {
+    Food,     // 食物 ItemUICategory = 46
+    Medicine, // 药品 ItemUICategory = 44
+}
+
+impl ConsumableType {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Food => "食物",
+            Self::Medicine => "药品",
+        }
+    }
+}
+
+pub const CONSUMABLE_TYPES: [ConsumableType; 2] = [
+    ConsumableType::Food,
+    ConsumableType::Medicine,
+];
+
+/// 食物/药品效果参数
+#[derive(Debug, Clone)]
+pub struct ConsumableEffect {
+    /// 属性名称 (如 "力量", "直击", "暴击" 等)
+    pub param_name: String,
+    /// 百分比加成 (如 10%)
+    pub percentage: u16,
+    /// 最大值上限
+    pub max_value: u16,
+    /// HQ 百分比加成
+    pub hq_percentage: u16,
+    /// HQ 最大值上限
+    pub hq_max_value: u16,
+}
+
+/// 消耗品详情 (从 ItemFood / ItemAction 表解析)
+#[derive(Debug, Clone)]
+pub struct ConsumableInfo {
+    /// 关联的 Item row_id
+    pub item_id: u32,
+    /// 效果列表
+    pub effects: Vec<ConsumableEffect>,
+}
 
 // ── 视图模式 & 排序 ──
 
@@ -252,6 +299,8 @@ pub struct GameItem {
     pub price_low: u32,
     /// 市场板搜索分类 (>0 表示可在市场板交易)
     pub item_search_category: u8,
+    /// ItemAction 表 row_id (通过 ItemAction.Data[0] 关联到 ItemFood)
+    pub item_action: u32,
 }
 
 impl GameItem {
@@ -362,6 +411,20 @@ impl GameItem {
     /// 是否为室内家具 (filter_group 14, 非外装非庭院)
     pub fn is_housing_indoor(&self) -> bool {
         self.filter_group == 14 && !self.is_housing_exterior() && !self.is_housing_yard()
+    }
+
+    /// 是否为消耗品 (食物/药品)
+    pub fn is_consumable(&self) -> bool {
+        self.consumable_type().is_some()
+    }
+
+    /// 消耗品类型 (FilterGroup: 5=Meal, 6=Medicine)
+    pub fn consumable_type(&self) -> Option<ConsumableType> {
+        match self.filter_group {
+            5 => Some(ConsumableType::Food),
+            6 => Some(ConsumableType::Medicine),
+            _ => None,
+        }
     }
 
     /// 获取房屋子标签分类

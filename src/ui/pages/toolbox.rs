@@ -27,6 +27,7 @@ pub enum AutoCraftState {
 pub struct AutoCraftUi {
     pub state: AutoCraftState,
     pub count: u32,
+    pub infinite: bool,
     pub macro_key: String,
     pub progress: (u32, u32),
     pub status: String,
@@ -39,6 +40,7 @@ impl Default for AutoCraftUi {
         Self {
             state: AutoCraftState::Idle,
             count: 10,
+            infinite: false,
             macro_key: "r".to_string(),
             progress: (0, 0),
             status: "就绪".to_string(),
@@ -97,8 +99,13 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label("制作次数:");
                 ui.add_enabled(
-                    !is_running,
+                    !is_running && !self.auto_craft.infinite,
                     egui::DragValue::new(&mut self.auto_craft.count).range(1..=999),
+                );
+                ui.add_space(8.0);
+                ui.add_enabled(
+                    !is_running,
+                    egui::Checkbox::new(&mut self.auto_craft.infinite, "无限循环"),
                 );
                 ui.add_space(16.0);
                 ui.label("宏按键:");
@@ -129,14 +136,16 @@ impl App {
 
                 ui.add_space(8.0);
 
-                if self.auto_craft.progress.1 > 0 {
-                    let (done, total) = self.auto_craft.progress;
+                let (done, total) = self.auto_craft.progress;
+                if total > 0 {
                     let frac = done as f32 / total as f32;
                     ui.add(
                         egui::ProgressBar::new(frac)
                             .text(format!("{}/{}", done, total))
                             .desired_width(200.0),
                     );
+                } else if self.auto_craft.infinite {
+                    ui.label(format!("已完成 {} 次", done));
                 }
             });
 
@@ -161,6 +170,7 @@ impl App {
 
     fn start_auto_craft(&mut self) {
         let count = self.auto_craft.count;
+        let infinite = self.auto_craft.infinite;
         let macro_key = self.auto_craft.macro_key.chars().next().unwrap_or('r');
 
         let tpl_set = self
@@ -185,12 +195,13 @@ impl App {
             ),
         };
 
-        self.auto_craft.progress = (0, count);
+        self.auto_craft.progress = (0, if infinite { 0 } else { count });
         self.auto_craft.status = "启动中...".to_string();
         self.auto_craft.log.clear();
 
         match AutoCraft::start(AutoCraftConfig {
             count,
+            infinite,
             macro_key,
             templates,
         }) {

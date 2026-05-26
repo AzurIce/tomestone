@@ -18,6 +18,7 @@ pub struct CraftTemplates {
 /// 自动制作配置
 pub struct AutoCraftConfig {
     pub count: u32,
+    pub infinite: bool,
     pub macro_key: char,
     pub templates: CraftTemplates,
 }
@@ -102,6 +103,7 @@ fn run_loop(
     cancel: &Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     let count = config.count;
+    let infinite = config.infinite;
     let macro_key = config.macro_key;
     let templates = config.templates;
 
@@ -127,21 +129,23 @@ fn run_loop(
 
     let _ = tx.send(AutoCraftEvent::Status("开始自动制作".to_string()));
     let mut success = 0u32;
+    let mut i = 0u32;
 
-    for i in 1..=count {
+    loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = tx.send(AutoCraftEvent::Status("已取消".to_string()));
             let _ = tx.send(AutoCraftEvent::Finished {
                 success,
-                total: count,
+                total: if infinite { success } else { count },
             });
             return Ok(());
         }
 
-        let _ = tx.send(AutoCraftEvent::Progress(i - 1, count));
+        i += 1;
+        let _ = tx.send(AutoCraftEvent::Progress(success, if infinite { 0 } else { count }));
         let start = Instant::now();
 
-        match craft_once(&ap, &templates, macro_key, cancel) {
+        match craft_once(&ap, &templates, macro_key, cancel, infinite) {
             Ok(true) => {
                 success += 1;
                 let elapsed = start.elapsed().as_secs_f32();
@@ -149,7 +153,7 @@ fn run_loop(
                     index: i,
                     elapsed_secs: elapsed,
                 });
-                let _ = tx.send(AutoCraftEvent::Progress(i, count));
+                let _ = tx.send(AutoCraftEvent::Progress(success, if infinite { 0 } else { count }));
                 // 短暂等待再开始下一次
                 std::thread::sleep(Duration::from_millis(500));
             }
@@ -160,7 +164,7 @@ fn run_loop(
                 });
                 let _ = tx.send(AutoCraftEvent::Finished {
                     success,
-                    total: count,
+                    total: if infinite { success } else { count },
                 });
                 return Ok(());
             }
@@ -169,11 +173,16 @@ fn run_loop(
                 return Ok(());
             }
         }
+
+        // 非无限模式达到次数后退出
+        if !infinite && i >= count {
+            break;
+        }
     }
 
     let _ = tx.send(AutoCraftEvent::Finished {
         success,
-        total: count,
+        total: if infinite { success } else { count },
     });
     Ok(())
 }
@@ -213,6 +222,7 @@ fn craft_once(
     templates: &CraftTemplates,
     macro_key: char,
     cancel: &Arc<AtomicBool>,
+    infinite: bool,
 ) -> anyhow::Result<bool> {
     // 1. 找到并点击 "开始制作作业"
     let Some(rect) = ap.find_image(&templates.start)? else {
@@ -241,12 +251,17 @@ fn craft_once(
     // 3. 按宏键
     win.focus_press(auto_play::controller::Key::Unicode(macro_key))?;
 
-    // 4. 等待制作完成
+    // 4. 等待制作完成（无限模式下不超时）
+    let timeout = if infinite {
+        Duration::from_secs(u64::MAX)
+    } else {
+        CRAFT_FINISH_TIMEOUT
+    };
     if !wait_for_state(
         ap,
         templates,
         CraftState::Ready,
-        CRAFT_FINISH_TIMEOUT,
+        timeout,
         cancel,
     )? {
         return Ok(false);

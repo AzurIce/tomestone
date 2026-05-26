@@ -121,12 +121,7 @@ impl GameData {
 
     /// 一次性加载 Item 表全部物品，返回统一的 GameItem 列表
     pub fn load_all_items(&self) -> Vec<GameItem> {
-        // 先输出一个已知消耗品的列数据进行调试
-        self.debug_item_columns(4650, "Boiled Egg");
-        
-        // 先扫描找到 ItemAction 列的正确索引
-        let (item_action_col, match_count) = self.scan_item_action_column();
-        println!("使用 ItemAction 列: [{}], 匹配 {} 个消耗品", item_action_col, match_count);
+        // 使用正确的 ItemAction 列索引 (col[30])
         
         let mut physis = self.physis.borrow_mut();
 
@@ -149,7 +144,7 @@ impl GameData {
         let mut items = Vec::new();
         for page in &sheet.pages {
             for (row_id, row) in page.into_iter().flatten_subrows() {
-                if let Some(item) = Self::parse_item_row(row_id, row, item_action_col) {
+                if let Some(item) = Self::parse_item_row(row_id, row) {
                     items.push(item);
                 }
             }
@@ -157,7 +152,7 @@ impl GameData {
         items
     }
 
-    fn parse_item_row(row_id: u32, row: &Row, item_action_col: usize) -> Option<GameItem> {
+    fn parse_item_row(row_id: u32, row: &Row) -> Option<GameItem> {
         // Item 表列索引 (通过 debug dump 确认)
         const COL_NAME: usize = 0;
         const COL_DESCRIPTION: usize = 8;
@@ -233,17 +228,14 @@ impl GameData {
             _ => 0,
         };
 
-        // ItemAction 列 (通过扫描自动确定)
-        let item_action = if item_action_col > 0 {
-            match row.columns.get(item_action_col) {
-                Some(Field::UInt16(v)) => *v as u32,
-                Some(Field::UInt8(v)) => *v as u32,
-                Some(Field::UInt32(v)) => *v,
-                Some(Field::Int32(v)) if *v > 0 => *v as u32,
-                _ => 0,
-            }
-        } else {
-            0
+        // ItemAction 列 (根据测试结果, col[30])
+        const COL_ITEM_ACTION: usize = 30;
+        let item_action = match row.columns.get(COL_ITEM_ACTION) {
+            Some(Field::UInt16(v)) => *v as u32,
+            Some(Field::UInt8(v)) => *v as u32,
+            Some(Field::UInt32(v)) => *v,
+            Some(Field::Int32(v)) if *v > 0 => *v as u32,
+            _ => 0,
         };
 
         Some(GameItem {
@@ -1061,29 +1053,44 @@ impl GameData {
     }
 
     /// 加载 BaseParam 表, 返回 row_id -> 参数名称
+    /// 尝试多种语言，因为国服客户端可能不包含简体中文翻译
     pub fn load_base_param_names(&self) -> std::collections::HashMap<u32, String> {
         let mut physis = self.physis.borrow_mut();
         let exh = match physis.read_excel_sheet_header("BaseParam") {
             Ok(h) => h,
             Err(_) => return std::collections::HashMap::new(),
         };
-        let sheet = match physis.read_excel_sheet(&exh, "BaseParam", Language::ChineseSimplified) {
-            Ok(s) => s,
-            Err(_) => return std::collections::HashMap::new(),
-        };
-        let mut map = std::collections::HashMap::new();
-        for page in &sheet.pages {
-            for (row_id, row) in page.into_iter().flatten_subrows() {
-                // BaseParam 表: col[0] = Name (String)
-                if let Some(Field::String(name)) = row.columns.first() {
-                    if !name.is_empty() {
-                        map.insert(row_id, name.clone());
+
+        // 尝试多种语言加载
+        let languages = [
+            Language::ChineseSimplified,
+            Language::English,
+            Language::Japanese,
+            Language::None,
+        ];
+
+        for lang in &languages {
+            if let Ok(sheet) = physis.read_excel_sheet(&exh, "BaseParam", *lang) {
+                let mut map = std::collections::HashMap::new();
+                for page in &sheet.pages {
+                    for (row_id, row) in page.into_iter().flatten_subrows() {
+                        // BaseParam 表: col[0] = Name (String)
+                        if let Some(Field::String(name)) = row.columns.first() {
+                            if !name.is_empty() {
+                                map.insert(row_id, name.clone());
+                            }
+                        }
                     }
+                }
+                if !map.is_empty() {
+                    println!("BaseParam: 使用 {:?} 加载了 {} 条参数记录", lang, map.len());
+                    return map;
                 }
             }
         }
-        println!("BaseParam: {} 条参数记录", map.len());
-        map
+
+        println!("BaseParam: 所有语言都返回空");
+        std::collections::HashMap::new()
     }
 
     /// 加载 ItemFood 表, 返回 row_id -> ConsumableInfo
@@ -1119,61 +1126,44 @@ impl GameData {
             for (row_id, row) in page.into_iter().flatten_subrows() {
                 let mut effects = Vec::new();
 
-                // 根据 xivapi 观察到的结构, 每组效果占多列
-                // col[0..3]: BaseParam[0..3]
-                // col[3]: EXPBonusPercent
-                // col[4..7]: IsRelative[0..3] (Boolean)
-                // col[7..10]: Max[0..3]
-                // col[10..13]: MaxHQ[0..3]
-                // col[13..16]: Value[0..3]
-                // col[16..19]: ValueHQ[0..3]
-                let effect_groups = [
-                    (0usize, 7usize, 10usize, 13usize, 16usize),   // 组1
-                    (1usize, 8usize, 11usize, 14usize, 17usize),   // 组2
-                    (2usize, 9usize, 12usize, 15usize, 18usize),   // 组3
-                ];
-
-                for &(bp_col, max_col, max_hq_col, val_col, val_hq_col) in &effect_groups {
-                    let base_param_id = match row.columns.get(bp_col) {
-                        Some(Field::UInt8(v)) => *v as u32,
-                        Some(Field::UInt16(v)) => *v as u32,
-                        Some(Field::UInt32(v)) => *v,
-                        Some(Field::Int32(v)) if *v > 0 => *v as u32,
+                // ItemFood 表实际结构 (根据测试结果):
+                // col[0] = EXPBonusPercent (UInt8)
+                // 每组效果占 6 列, 共 3 组:
+                //   col[1+i*6+0] = BaseParam[i] (UInt8)
+                //   col[1+i*6+1] = IsRelative[i] (Bool)
+                //   col[1+i*6+2] = Value[i] (Int8)
+                //   col[1+i*6+3] = Max[i] (Int16)
+                //   col[1+i*6+4] = ValueHQ[i] (Int8)
+                //   col[1+i*6+5] = MaxHQ[i] (Int16)
+                for i in 0..3 {
+                    let base_col = 1 + i * 6;
+                    let base_param_id = match row.columns.get(base_col) {
+                        Some(Field::UInt8(v)) if *v > 0 => *v as u32,
+                        Some(Field::UInt16(v)) if *v > 0 => *v as u32,
                         _ => continue,
                     };
-                    if base_param_id == 0 {
-                        continue;
-                    }
 
-                    let max_value = match row.columns.get(max_col) {
+                    let value = match row.columns.get(base_col + 2) {
+                        Some(Field::Int8(v)) => *v as u16,
                         Some(Field::UInt8(v)) => *v as u16,
-                        Some(Field::UInt16(v)) => *v,
-                        Some(Field::Int16(v)) => *v as u16,
-                        Some(Field::Int32(v)) => *v as u16,
                         _ => 0,
                     };
 
-                    let hq_max_value = match row.columns.get(max_hq_col) {
-                        Some(Field::UInt8(v)) => *v as u16,
-                        Some(Field::UInt16(v)) => *v,
+                    let max_value = match row.columns.get(base_col + 3) {
                         Some(Field::Int16(v)) => *v as u16,
-                        Some(Field::Int32(v)) => *v as u16,
+                        Some(Field::UInt16(v)) => *v,
                         _ => 0,
                     };
 
-                    let value = match row.columns.get(val_col) {
+                    let hq_value = match row.columns.get(base_col + 4) {
+                        Some(Field::Int8(v)) => *v as u16,
                         Some(Field::UInt8(v)) => *v as u16,
-                        Some(Field::UInt16(v)) => *v,
-                        Some(Field::Int16(v)) => *v as u16,
-                        Some(Field::Int32(v)) => *v as u16,
                         _ => 0,
                     };
 
-                    let hq_value = match row.columns.get(val_hq_col) {
-                        Some(Field::UInt8(v)) => *v as u16,
-                        Some(Field::UInt16(v)) => *v,
+                    let hq_max_value = match row.columns.get(base_col + 5) {
                         Some(Field::Int16(v)) => *v as u16,
-                        Some(Field::Int32(v)) => *v as u16,
+                        Some(Field::UInt16(v)) => *v,
                         _ => 0,
                     };
 
@@ -1223,24 +1213,26 @@ impl GameData {
         let mut map = std::collections::HashMap::new();
         for page in &sheet.pages {
             for (row_id, row) in page.into_iter().flatten_subrows() {
-                // ItemAction 表结构:
-                // col[0] = Action (Int32)
-                // col[1..10] = Data[0..9]
-                // col[10..19] = DataHQ[0..9]
+                // ItemAction 表结构 (根据测试结果):
+                // col[0] = Action category or flags (UInt8)
+                // col[1..3] = CondBattle, CondPVP, CondPVPOnly (Bool)
+                // col[4] = Action ID (UInt16)
+                // col[5..13] = Data[0..8] (UInt16)
+                // col[14..22] = DataHQ[0..8] (UInt16)
                 // Data[0] 指向 ItemFood row_id
-                let data_0 = match row.columns.get(1) {
-                    Some(Field::Int32(v)) if *v > 0 => *v as u32,
-                    Some(Field::UInt32(v)) if *v > 0 => *v,
+                let data_0 = match row.columns.get(5) {
                     Some(Field::UInt16(v)) if *v > 0 => *v as u32,
                     Some(Field::UInt8(v)) if *v > 0 => *v as u32,
+                    Some(Field::UInt32(v)) if *v > 0 => *v,
+                    Some(Field::Int32(v)) if *v > 0 => *v as u32,
                     _ => 0,
                 };
 
-                let data_hq_0 = match row.columns.get(10) {
-                    Some(Field::Int32(v)) if *v > 0 => *v as u32,
-                    Some(Field::UInt32(v)) if *v > 0 => *v,
+                let data_hq_0 = match row.columns.get(14) {
                     Some(Field::UInt16(v)) if *v > 0 => *v as u32,
                     Some(Field::UInt8(v)) if *v > 0 => *v as u32,
+                    Some(Field::UInt32(v)) if *v > 0 => *v,
+                    Some(Field::Int32(v)) if *v > 0 => *v as u32,
                     _ => 0,
                 };
 
@@ -1390,5 +1382,305 @@ impl GameData {
         }
 
         println!("未找到 row_id={} 的 Item 记录", target_row_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use physis::excel::Field;
+    use physis::Language;
+
+    fn get_game_data() -> Option<GameData> {
+        let config = crate::config::load_config();
+        println!("Config game_install_dir: {:?}", config.game_install_dir);
+        let install_dir = config.game_install_dir?;
+        println!("Install dir: {:?}", install_dir);
+        if let Err(e) = validate_install_dir(&install_dir) {
+            println!("跳过测试: {}", e);
+            return None;
+        }
+        println!("GameData created successfully");
+        Some(GameData::new(&install_dir))
+    }
+
+    /// 测试 1: 直接查找 Boiled Egg 的 ItemAction 列位置
+    #[test]
+    fn test_find_item_action_column() {
+        let game = get_game_data().expect("无法获取游戏数据");
+        let mut physis = game.physis.borrow_mut();
+
+        // 已知: Boiled Egg (4650) 的 ItemAction = 56
+        const TARGET_ROW_ID: u32 = 4650;
+        const EXPECTED_ACTION_ID: u32 = 56;
+
+        // 加载 Item 表
+        let exh = physis.read_excel_sheet_header("Item").expect("无法加载 Item");
+        let sheet = physis.read_excel_sheet(&exh, "Item", Language::ChineseSimplified).expect("无法读取 Item");
+
+        let mut found = false;
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if row_id != TARGET_ROW_ID {
+                    continue;
+                }
+                found = true;
+                println!("=== Boiled Egg (row_id={}) 的列数据 ===", row_id);
+                println!("总列数: {}", row.columns.len());
+
+                // 找出哪一列等于 56
+                let mut action_col = None;
+                for (col_idx, col) in row.columns.iter().enumerate() {
+                    let val_opt = match col {
+                        Field::Int32(v) if *v == EXPECTED_ACTION_ID as i32 => Some(*v as u32),
+                        Field::UInt32(v) if *v == EXPECTED_ACTION_ID => Some(*v),
+                        Field::UInt16(v) if *v == EXPECTED_ACTION_ID as u16 => Some(*v as u32),
+                        Field::UInt8(v) if *v == EXPECTED_ACTION_ID as u8 => Some(*v as u32),
+                        _ => None,
+                    };
+                    if val_opt.is_some() {
+                        action_col = Some(col_idx);
+                        println!("*** 找到! col[{}] = {} (ItemAction ID) ***", col_idx, EXPECTED_ACTION_ID);
+                    }
+                    // 同时打印非零列帮助理解结构
+                    let display = match col {
+                        Field::String(s) if !s.is_empty() => format!("String(\"{}\")", s),
+                        Field::String(_) => "String(\"\")".to_string(),
+                        Field::Int32(v) => format!("Int32({})", v),
+                        Field::UInt32(v) => format!("UInt32({})", v),
+                        Field::Int16(v) => format!("Int16({})", v),
+                        Field::UInt16(v) => format!("UInt16({})", v),
+                        Field::UInt8(v) => format!("UInt8({})", v),
+                        Field::Int64(v) => format!("Int64({})", v),
+                        Field::UInt64(v) => format!("UInt64({})", v),
+                        Field::Int8(v) => format!("Int8({})", v),
+                        Field::Bool(v) => format!("Bool({})", v),
+                        Field::Float32(v) => format!("Float32({})", v),
+                    };
+                    println!("  col[{:2}] = {}", col_idx, display);
+                }
+
+                let col = action_col.expect(&format!("未找到值为 {} 的列", EXPECTED_ACTION_ID));
+                println!("\n结论: ItemAction 列在 col[{}]", col);
+                
+                // 同时检查其他已知消耗品验证
+                println!("\n验证其他消耗品:");
+                break;
+            }
+        }
+        assert!(found, "未找到 Boiled Egg (row_id={})", TARGET_ROW_ID);
+    }
+
+    /// 测试 2: 验证 ItemAction 表结构，找到 Data[0] 所在列
+    #[test]
+    fn test_item_action_structure() {
+        let game = get_game_data().expect("无法获取游戏数据");
+        let mut physis = game.physis.borrow_mut();
+
+        let exh = physis.read_excel_sheet_header("ItemAction").expect("无法加载 ItemAction");
+        let sheet = physis.read_excel_sheet(&exh, "ItemAction", Language::None).expect("无法读取 ItemAction");
+
+        let mut found_56 = false;
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if row_id != 56 {
+                    continue;
+                }
+                found_56 = true;
+                println!("=== ItemAction row_id=56 的列数据 ===");
+                println!("总列数: {}", row.columns.len());
+
+                // 打印所有列，找到值为 48 的列（已知的 ItemFood ID）
+                let mut data_0_col = None;
+                const EXPECTED_FOOD_ID: u32 = 48;
+                
+                for (i, col) in row.columns.iter().enumerate() {
+                    let val_opt = match col {
+                        Field::Int32(v) if *v == EXPECTED_FOOD_ID as i32 => Some(*v as u32),
+                        Field::UInt32(v) if *v == EXPECTED_FOOD_ID => Some(*v),
+                        Field::UInt16(v) if *v == EXPECTED_FOOD_ID as u16 => Some(*v as u32),
+                        Field::UInt8(v) if *v == EXPECTED_FOOD_ID as u8 => Some(*v as u32),
+                        _ => None,
+                    };
+                    if val_opt.is_some() {
+                        data_0_col = Some(i);
+                        println!("*** 找到! col[{}] = {} (ItemFood ID) ***", i, EXPECTED_FOOD_ID);
+                    }
+                    println!("  col[{:2}] = {:?}", i, col);
+                }
+
+                let col = data_0_col.expect(&format!("未找到值为 {} 的列", EXPECTED_FOOD_ID));
+                println!("\n结论: ItemAction.Data[0] 在 col[{}]", col);
+                break;
+            }
+        }
+        assert!(found_56, "未找到 ItemAction row_id=56");
+    }
+
+    /// 测试 3: 验证 ItemFood 表结构
+    #[test]
+    fn test_item_food_structure() {
+        let Some(game) = get_game_data() else { return };
+        let mut physis = game.physis.borrow_mut();
+
+        let exh = physis.read_excel_sheet_header("ItemFood").expect("无法加载 ItemFood");
+        let sheet = physis.read_excel_sheet(&exh, "ItemFood", Language::None).expect("无法读取 ItemFood");
+
+        let mut found_48 = false;
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if row_id != 48 {
+                    continue;
+                }
+                found_48 = true;
+                println!("ItemFood row_id=48 的列数: {}", row.columns.len());
+
+                // 打印所有列
+                for (i, col) in row.columns.iter().enumerate() {
+                    println!("  col[{}] = {:?}", i, col);
+                }
+
+                // BaseParam[0] 应该在 col[0]
+                let base_param = match row.columns.get(0) {
+                    Some(Field::Int32(v)) => *v as u32,
+                    Some(Field::UInt32(v)) => *v,
+                    Some(Field::UInt16(v)) => *v as u32,
+                    Some(Field::UInt8(v)) => *v as u32,
+                    other => panic!("ItemFood BaseParam[0] 类型不对: {:?}", other),
+                };
+                println!("ItemFood(48).BaseParam[0] = {}", base_param);
+                assert_eq!(base_param, 3, "Boiled Egg 的 ItemFood BaseParam[0] 应该是 3 (Vitality)");
+                break;
+            }
+        }
+        assert!(found_48, "未找到 ItemFood row_id=48");
+    }
+
+    /// 测试 4: 验证 BaseParam 表结构
+    #[test]
+    fn test_base_param_names() {
+        let game = get_game_data().expect("无法获取游戏数据");
+        let mut physis = game.physis.borrow_mut();
+
+        let exh = physis.read_excel_sheet_header("BaseParam").expect("无法加载 BaseParam");
+        println!("BaseParam 表: {} 列, 语言: {:?}", exh.column_definitions.len(), exh.languages);
+
+        // 打印前几行看结构
+        let sheet = physis.read_excel_sheet(&exh, "BaseParam", Language::ChineseSimplified)
+            .or_else(|_| physis.read_excel_sheet(&exh, "BaseParam", Language::English))
+            .or_else(|_| physis.read_excel_sheet(&exh, "BaseParam", Language::None))
+            .expect("无法读取 BaseParam");
+        
+        let mut names = std::collections::HashMap::new();
+        for page in &sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows().take(5) {
+                println!("BaseParam row_id={}: {} 列", row_id, row.columns.len());
+                for (i, col) in row.columns.iter().enumerate() {
+                    println!("  col[{}] = {:?}", i, col);
+                }
+                if let Some(Field::String(name)) = row.columns.first() {
+                    if !name.is_empty() {
+                        names.insert(row_id, name.clone());
+                    }
+                }
+            }
+        }
+        
+        println!("BaseParam: 找到 {} 条有名称记录", names.len());
+        // 不强制断言，因为国服可能真的没有 BaseParam 翻译
+        // 但如果找到了，验证 Vitality
+        if let Some(vitality) = names.get(&3) {
+            println!("BaseParam row_id=3 = '{}'", vitality);
+        }
+    }
+
+    /// 测试 5: 完整链路测试（直接读取验证）
+    #[test]
+    fn test_full_consumable_chain() {
+        let game = get_game_data().expect("无法获取游戏数据");
+        let mut physis = game.physis.borrow_mut();
+
+        // 1. 读取 Item 表，找到 Boiled Egg 和 ItemAction 列
+        let item_exh = physis.read_excel_sheet_header("Item").expect("无法加载 Item");
+        let item_sheet = physis.read_excel_sheet(&item_exh, "Item", Language::ChineseSimplified).expect("无法读取 Item");
+        
+        let mut boiled_egg_action_col = None;
+        for page in &item_sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if row_id != 4650 {
+                    continue;
+                }
+                // 找到值为 56 的列
+                for (col_idx, col) in row.columns.iter().enumerate() {
+                    let is_match = match col {
+                        Field::Int32(v) => *v == 56,
+                        Field::UInt32(v) => *v == 56,
+                        Field::UInt16(v) => *v == 56,
+                        Field::UInt8(v) => *v == 56,
+                        _ => false,
+                    };
+                    if is_match {
+                        boiled_egg_action_col = Some(col_idx);
+                        println!("Boiled Egg (4650): ItemAction=56 在 col[{}]", col_idx);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        let action_col = boiled_egg_action_col.expect("未找到 Boiled Egg 的 ItemAction 列");
+
+        // 2. 读取 ItemAction 表，找到 row_id=56，找到 Data[0]=48 的列
+        let action_exh = physis.read_excel_sheet_header("ItemAction").expect("无法加载 ItemAction");
+        let action_sheet = physis.read_excel_sheet(&action_exh, "ItemAction", Language::None).expect("无法读取 ItemAction");
+        
+        let mut action_data_col = None;
+        for page in &action_sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if row_id != 56 {
+                    continue;
+                }
+                for (col_idx, col) in row.columns.iter().enumerate() {
+                    let is_match = match col {
+                        Field::Int32(v) => *v == 48,
+                        Field::UInt32(v) => *v == 48,
+                        Field::UInt16(v) => *v == 48,
+                        Field::UInt8(v) => *v == 48,
+                        _ => false,
+                    };
+                    if is_match {
+                        action_data_col = Some(col_idx);
+                        println!("ItemAction(56): Data[0]=48 在 col[{}]", col_idx);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        let data_col = action_data_col.expect("未找到 ItemAction 56 的 Data[0] 列");
+
+        // 3. 读取 ItemFood 表，验证 row_id=48
+        let food_exh = physis.read_excel_sheet_header("ItemFood").expect("无法加载 ItemFood");
+        let food_sheet = physis.read_excel_sheet(&food_exh, "ItemFood", Language::None).expect("无法读取 ItemFood");
+        
+        let mut found_food = false;
+        for page in &food_sheet.pages {
+            for (row_id, row) in page.into_iter().flatten_subrows() {
+                if row_id != 48 {
+                    continue;
+                }
+                found_food = true;
+                println!("ItemFood(48): {} 列", row.columns.len());
+                println!("效果数据:");
+                for (i, col) in row.columns.iter().enumerate() {
+                    println!("  col[{}] = {:?}", i, col);
+                }
+                break;
+            }
+        }
+        assert!(found_food, "未找到 ItemFood row_id=48");
+
+        println!("\n=== 完整链路验证通过 ===");
+        println!("Item(4650 Boiled Egg) -> col[{}]=56 -> ItemAction(56) -> col[{}]=48 -> ItemFood(48)", action_col, data_col);
     }
 }

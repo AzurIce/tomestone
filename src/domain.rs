@@ -123,13 +123,15 @@ pub const CONSUMABLE_TYPES: [ConsumableType; 2] = [
 pub struct ConsumableEffect {
     /// 属性名称 (如 "力量", "直击", "暴击" 等)
     pub param_name: String,
-    /// 百分比加成 (如 10%)
-    pub percentage: u16,
-    /// 最大值上限
+    /// 是否为百分比加成 (true=+X%, false=+X 固定值)
+    pub is_relative: bool,
+    /// 普通品质加成值
+    pub value: u16,
+    /// 普通品质上限
     pub max_value: u16,
-    /// HQ 百分比加成
-    pub hq_percentage: u16,
-    /// HQ 最大值上限
+    /// HQ 加成值
+    pub hq_value: u16,
+    /// HQ 上限
     pub hq_max_value: u16,
 }
 
@@ -138,6 +140,8 @@ pub struct ConsumableEffect {
 pub struct ConsumableInfo {
     /// 关联的 Item row_id
     pub item_id: u32,
+    /// 经验值加成百分比 (如 3%)
+    pub exp_bonus: u8,
     /// 效果列表
     pub effects: Vec<ConsumableEffect>,
 }

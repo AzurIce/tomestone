@@ -1093,17 +1093,51 @@ impl GameData {
         std::collections::HashMap::new()
     }
 
+    /// 内置 BaseParam ID -> 中文名称映射 (关键属性)
+    fn built_in_base_param_names() -> std::collections::HashMap<u32, String> {
+        let mut map = std::collections::HashMap::new();
+        // 战斗属性
+        map.insert(1, "力量".to_string());
+        map.insert(2, "灵巧".to_string());
+        map.insert(3, "耐力".to_string());
+        map.insert(4, "智力".to_string());
+        map.insert(5, "精神".to_string());
+        map.insert(6, "信仰".to_string());
+        map.insert(19, "坚韧".to_string());
+        map.insert(22, "直击".to_string());
+        map.insert(27, "暴击".to_string());
+        map.insert(44, "信念".to_string());
+        map.insert(45, "技能速度".to_string());
+        map.insert(46, "咏唱速度".to_string());
+        // 生产采集
+        map.insert(11, "制作力".to_string());
+        map.insert(70, "作业精度".to_string());
+        map.insert(71, "加工精度".to_string());
+        map.insert(10, "采集力".to_string());
+        map.insert(72, "获得力".to_string());
+        map.insert(73, "鉴别力".to_string());
+        // 其他
+        map.insert(7, "HP".to_string());
+        map.insert(8, "MP".to_string());
+        map.insert(52, "经验值".to_string());
+        map
+    }
+
     /// 加载 ItemFood 表, 返回 row_id -> ConsumableInfo
-    /// ItemFood 表结构 (根据 xivapi v2):
-    ///   BaseParam[3] (引用 BaseParam 表)
-    ///   EXPBonusPercent (UInt8)
-    ///   IsRelative[3] (Boolean)
-    ///   Max[3], MaxHQ[3] (Int16)
-    ///   Value[3], ValueHQ[3] (Int16)
+    /// ItemFood 表结构 (根据测试结果):
+    ///   col[0] = EXPBonusPercent (UInt8)
+    ///   每组效果占 6 列, 共 3 组:
+    ///     col[1+i*6+0] = BaseParam[i] (UInt8)
+    ///     col[1+i*6+1] = IsRelative[i] (Bool)
+    ///     col[1+i*6+2] = Value[i] (Int8)
+    ///     col[1+i*6+3] = Max[i] (Int16)
+    ///     col[1+i*6+4] = ValueHQ[i] (Int8)
+    ///     col[1+i*6+5] = MaxHQ[i] (Int16)
     pub fn load_item_food(
         &self,
-        base_param_names: &std::collections::HashMap<u32, String>,
+        _base_param_names: &std::collections::HashMap<u32, String>,
     ) -> std::collections::HashMap<u32, ConsumableInfo> {
+        let built_in = Self::built_in_base_param_names();
         let mut physis = self.physis.borrow_mut();
 
         let exh = match physis.read_excel_sheet_header("ItemFood") {
@@ -1126,21 +1160,24 @@ impl GameData {
             for (row_id, row) in page.into_iter().flatten_subrows() {
                 let mut effects = Vec::new();
 
-                // ItemFood 表实际结构 (根据测试结果):
-                // col[0] = EXPBonusPercent (UInt8)
-                // 每组效果占 6 列, 共 3 组:
-                //   col[1+i*6+0] = BaseParam[i] (UInt8)
-                //   col[1+i*6+1] = IsRelative[i] (Bool)
-                //   col[1+i*6+2] = Value[i] (Int8)
-                //   col[1+i*6+3] = Max[i] (Int16)
-                //   col[1+i*6+4] = ValueHQ[i] (Int8)
-                //   col[1+i*6+5] = MaxHQ[i] (Int16)
+                // 经验值加成
+                let exp_bonus = match row.columns.first() {
+                    Some(Field::UInt8(v)) => *v,
+                    _ => 0,
+                };
+
+                // 3 组效果
                 for i in 0..3 {
                     let base_col = 1 + i * 6;
                     let base_param_id = match row.columns.get(base_col) {
                         Some(Field::UInt8(v)) if *v > 0 => *v as u32,
                         Some(Field::UInt16(v)) if *v > 0 => *v as u32,
                         _ => continue,
+                    };
+
+                    let is_relative = match row.columns.get(base_col + 1) {
+                        Some(Field::Bool(v)) => *v,
+                        _ => false,
                     };
 
                     let value = match row.columns.get(base_col + 2) {
@@ -1167,22 +1204,23 @@ impl GameData {
                         _ => 0,
                     };
 
-                    let param_name = base_param_names
+                    let param_name = built_in
                         .get(&base_param_id)
                         .cloned()
                         .unwrap_or_else(|| format!("属性#{}", base_param_id));
 
                     effects.push(ConsumableEffect {
                         param_name,
-                        percentage: value,
+                        is_relative,
+                        value,
                         max_value,
-                        hq_percentage: hq_value,
+                        hq_value,
                         hq_max_value,
                     });
                 }
 
-                if !effects.is_empty() {
-                    map.insert(row_id, ConsumableInfo { item_id: 0, effects });
+                if !effects.is_empty() || exp_bonus > 0 {
+                    map.insert(row_id, ConsumableInfo { item_id: 0, exp_bonus, effects });
                 }
             }
         }

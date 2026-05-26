@@ -87,6 +87,7 @@ impl AutoCraft {
 
 const WINDOW_TITLE: &str = "最终幻想XIV";
 const CRAFT_START_TIMEOUT: Duration = Duration::from_secs(5);
+const CRAFT_BUTTON_TIMEOUT: Duration = Duration::from_secs(15);
 const CRAFT_FINISH_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -154,28 +155,42 @@ fn run_loop(
                     elapsed_secs: elapsed,
                 });
                 let _ = tx.send(AutoCraftEvent::Progress(success, if infinite { 0 } else { count }));
-                // 短暂等待再开始下一次
-                std::thread::sleep(Duration::from_millis(500));
             }
             Ok(false) => {
                 let _ = tx.send(AutoCraftEvent::CraftFailed {
                     index: i,
                     reason: "未找到制作按钮或超时".to_string(),
                 });
+                // 无限模式下失败后重试，非无限模式下停止
+                if infinite {
+                    let _ = tx.send(AutoCraftEvent::Status(
+                        "本次未找到按钮，5秒后重试...".to_string(),
+                    ));
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
                 let _ = tx.send(AutoCraftEvent::Finished {
                     success,
-                    total: if infinite { success } else { count },
+                    total: count,
                 });
                 return Ok(());
             }
             Err(e) => {
                 let _ = tx.send(AutoCraftEvent::Error(format!("第{}次出错: {}", i, e)));
+                // 无限模式下出错后也重试
+                if infinite {
+                    let _ = tx.send(AutoCraftEvent::Status(
+                        "出错，10秒后重试...".to_string(),
+                    ));
+                    std::thread::sleep(Duration::from_secs(10));
+                    continue;
+                }
                 return Ok(());
             }
         }
 
         // 非无限模式达到次数后退出
-        if !infinite && i >= count {
+        if !infinite && success >= count {
             break;
         }
     }
@@ -224,10 +239,26 @@ fn craft_once(
     cancel: &Arc<AtomicBool>,
     infinite: bool,
 ) -> anyhow::Result<bool> {
-    // 1. 找到并点击 "开始制作作业"
-    let Some(rect) = ap.find_image(&templates.start)? else {
-        return Ok(false);
+    // 1. 等待并点击 "开始制作作业"
+    let rect = {
+        let start = Instant::now();
+        let mut rect = None;
+        while start.elapsed() < CRAFT_BUTTON_TIMEOUT {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+            if let Some(r) = ap.find_image(&templates.start)? {
+                rect = Some(r);
+                break;
+            }
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        match rect {
+            Some(r) => r,
+            None => return Ok(false),
+        }
     };
+
     let win: &WindowsController = ap.controller_ref().unwrap();
     let click_x = rect.x + rect.width / 2;
     let click_y = rect.y + rect.height / 2;

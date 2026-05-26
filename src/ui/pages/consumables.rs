@@ -246,22 +246,45 @@ impl App {
         // 从 ItemFood 表获取效果
         if let Some(&food_id) = gs.item_to_food.get(&item.row_id) {
             if let Some(food_info) = gs.item_food.get(&food_id) {
+                // 经验值加成
+                if food_info.exp_bonus > 0 {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("经验值").strong());
+                        ui.label(
+                            egui::RichText::new(format!("+{}%", food_info.exp_bonus))
+                                .small(),
+                        );
+                    });
+                }
+
                 for effect in &food_info.effects {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(&effect.param_name).strong());
+                        let suffix = if effect.is_relative { "%" } else { "" };
+                        let max_str = if effect.max_value > 0 {
+                            format!(" (上限{})", effect.max_value)
+                        } else {
+                            String::new()
+                        };
                         ui.label(
                             egui::RichText::new(format!(
-                                "+{}% (上限 {})",
-                                effect.percentage, effect.max_value
+                                "+{}{}{}",
+                                effect.value, suffix, max_str
                             ))
                             .small(),
                         );
                     });
-                    if effect.hq_percentage > 0 {
+                    if effect.hq_value > 0 || effect.hq_max_value > 0 {
+                        let suffix = if effect.is_relative { "%" } else { "" };
+                        let max_str = if effect.hq_max_value > 0 {
+                            format!(" (上限{})", effect.hq_max_value)
+                        } else {
+                            String::new()
+                        };
                         ui.label(
                             egui::RichText::new(format!(
-                                "  HQ: +{}% (上限 {})",
-                                effect.hq_percentage, effect.hq_max_value
+                                "  HQ: +{}{}{}",
+                                effect.hq_value, suffix, max_str
                             ))
                             .small()
                             .weak(),

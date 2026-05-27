@@ -415,15 +415,9 @@ impl App {
         config.set_abort_button_match_def(match_def);
 
         // 在主线程中获取截图（避免跨线程传递 Controller）
-        let screenshot = match WindowsController::from_window_title("FINAL FANTASY XIV") {
-            Ok(ctrl) => match ctrl.screencap() {
-                Ok(img) => img,
-                Err(e) => {
-                    self.auto_craft.craft_info_extracting = false;
-                    self.auto_craft.craft_info_status = format!("截图失败: {}", e);
-                    return;
-                }
-            },
+        // 尝试多个可能的窗口标题（国服/国际服）
+        let screenshot = match Self::find_game_window_and_capture() {
+            Ok(img) => img,
             Err(e) => {
                 self.auto_craft.craft_info_extracting = false;
                 self.auto_craft.craft_info_status = format!("无法找到游戏窗口: {}", e);
@@ -439,5 +433,28 @@ impl App {
             let result = extractor.extract(&screenshot);
             let _ = tx.send(result.map_err(|e| e.to_string()));
         });
+    }
+
+    /// 尝试多个可能的窗口标题来查找 FF14 游戏窗口
+    fn find_game_window_and_capture() -> anyhow::Result<image::DynamicImage> {
+        const POSSIBLE_TITLES: &[&str] = &[
+            "最终幻想XIV",
+            "FINAL FANTASY XIV",
+        ];
+
+        for title in POSSIBLE_TITLES {
+            match WindowsController::from_window_title(title) {
+                Ok(ctrl) => match ctrl.screencap() {
+                    Ok(img) => return Ok(img),
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "未找到游戏窗口。请确保 FF14 正在运行。\n尝试的标题: {:?}",
+            POSSIBLE_TITLES
+        ))
     }
 }

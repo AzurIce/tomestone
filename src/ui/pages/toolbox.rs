@@ -437,10 +437,7 @@ impl App {
 
     /// 尝试多个可能的窗口标题来查找 FF14 游戏窗口
     fn find_game_window_and_capture() -> anyhow::Result<image::DynamicImage> {
-        const POSSIBLE_TITLES: &[&str] = &[
-            "最终幻想XIV",
-            "FINAL FANTASY XIV",
-        ];
+        const POSSIBLE_TITLES: &[&str] = &["最终幻想XIV"];
 
         for title in POSSIBLE_TITLES {
             match WindowsController::from_window_title(title) {

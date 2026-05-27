@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use ap_xiv::auto_craft::{AutoCraft, AutoCraftConfig, AutoCraftEvent, AutoCraftHandle, CraftTemplates};
-use auto_play::{MatchDefinition, MatcherOptions};
+use ap_xiv::craft_info::{CraftInfo, CraftInfoConfig, CraftInfoExtractor};
+use auto_play::{ControllerTrait, MatchDefinition, MatcherOptions, WindowsController};
 use eframe::egui;
 
 use crate::app::App;
@@ -12,6 +13,7 @@ use crate::template::TemplateSet;
 pub enum ToolboxTab {
     #[default]
     AutoCraft,
+    CraftInfo,
     TemplateEditor,
 }
 
@@ -33,6 +35,11 @@ pub struct AutoCraftUi {
     pub status: String,
     pub log: Vec<String>,
     pub tab: ToolboxTab,
+    // 制造信息提取
+    pub craft_info_result: Option<CraftInfo>,
+    pub craft_info_status: String,
+    pub craft_info_extracting: bool,
+    pub craft_info_receiver: Option<std::sync::mpsc::Receiver<Result<CraftInfo, String>>>,
 }
 
 impl Default for AutoCraftUi {
@@ -46,6 +53,10 @@ impl Default for AutoCraftUi {
             status: "就绪".to_string(),
             log: Vec::new(),
             tab: ToolboxTab::default(),
+            craft_info_result: None,
+            craft_info_status: "点击提取按钮获取制造信息".to_string(),
+            craft_info_extracting: false,
+            craft_info_receiver: None,
         }
     }
 }
@@ -55,7 +66,12 @@ impl App {
         egui::CentralPanel::default().show(ctx, |ui| {
             // Tab 栏
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.auto_craft.tab, ToolboxTab::AutoCraft, "工具箱");
+                ui.selectable_value(&mut self.auto_craft.tab, ToolboxTab::AutoCraft, "自动制作");
+                ui.selectable_value(
+                    &mut self.auto_craft.tab,
+                    ToolboxTab::CraftInfo,
+                    "制造信息",
+                );
                 ui.selectable_value(
                     &mut self.auto_craft.tab,
                     ToolboxTab::TemplateEditor,
@@ -67,6 +83,9 @@ impl App {
             match self.auto_craft.tab {
                 ToolboxTab::AutoCraft => {
                     self.show_auto_craft_content(ui);
+                }
+                ToolboxTab::CraftInfo => {
+                    self.show_craft_info_content(ui);
                 }
                 ToolboxTab::TemplateEditor => {
                     self.template_editor.ensure_loaded(AUTO_CRAFT_TEMPLATES);
@@ -266,5 +285,138 @@ impl App {
         if finished {
             self.auto_craft.state = AutoCraftState::Idle;
         }
+    }
+
+    fn show_craft_info_content(&mut self, ui: &mut egui::Ui) {
+        ui.group(|ui| {
+            ui.label(egui::RichText::new("制造信息提取").strong().size(16.0));
+            ui.label(
+                egui::RichText::new("从制造窗口提取当前耐久、进展、品质信息")
+                    .small()
+                    .weak(),
+            );
+            ui.add_space(4.0);
+
+            // 检查是否有提取结果返回
+            if self.auto_craft.craft_info_extracting {
+                if let Some(ref rx) = self.auto_craft.craft_info_receiver {
+                    match rx.try_recv() {
+                        Ok(result) => {
+                            self.auto_craft.craft_info_extracting = false;
+                            self.auto_craft.craft_info_receiver = None;
+                            match result {
+                                Ok(info) => {
+                                    self.auto_craft.craft_info_result = Some(info.clone());
+                                    self.auto_craft.craft_info_status = format!(
+                                        "提取成功 - 耐久 {}/{}, 进展 {}/{}, 品质 {}/{}",
+                                        info.durability.0,
+                                        info.durability.1,
+                                        info.progress.0,
+                                        info.progress.1,
+                                        info.quality.0,
+                                        info.quality.1,
+                                    );
+                                }
+                                Err(e) => {
+                                    self.auto_craft.craft_info_status = format!("提取失败: {}", e);
+                                }
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            // 还在提取中，继续显示 spinner
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            self.auto_craft.craft_info_extracting = false;
+                            self.auto_craft.craft_info_receiver = None;
+                            self.auto_craft.craft_info_status = "提取线程异常终止".to_string();
+                        }
+                    }
+                }
+            }
+
+            ui.horizontal(|ui| {
+                if self.auto_craft.craft_info_extracting {
+                    ui.add(egui::Spinner::new());
+                    ui.label("正在提取...");
+                } else {
+                    if ui.button("提取信息").clicked() {
+                        self.extract_craft_info();
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.label(&self.auto_craft.craft_info_status);
+
+            if let Some(info) = &self.auto_craft.craft_info_result {
+                ui.add_space(8.0);
+                ui.group(|ui| {
+                    ui.label(format!(
+                        "耐久: {} / {}",
+                        info.durability.0, info.durability.1
+                    ));
+                    ui.label(format!(
+                        "进展: {} / {}",
+                        info.progress.0, info.progress.1
+                    ));
+                    ui.label(format!(
+                        "品质: {} / {}",
+                        info.quality.0, info.quality.1
+                    ));
+                    if let Some(hq) = info.hq_rate {
+                        ui.label(format!("优质率: {}%", hq));
+                    }
+                });
+            }
+        });
+    }
+
+    fn extract_craft_info(&mut self) {
+        self.auto_craft.craft_info_extracting = true;
+        self.auto_craft.craft_info_status = "正在提取...".to_string();
+        self.auto_craft.craft_info_result = None;
+
+        let tpl_set = self
+            .template_editor
+            .template_set()
+            .cloned()
+            .unwrap_or_else(|| TemplateSet::load(Default::default(), AUTO_CRAFT_TEMPLATES));
+
+        let stop_img = tpl_set.templates[AC_TPL_STOP].image.clone();
+        let stop_threshold = tpl_set.templates[AC_TPL_STOP].def.threshold;
+
+        let match_def = MatchDefinition::new(
+            MatcherOptions::default().with_threshold(stop_threshold),
+            Arc::new(stop_img),
+        );
+
+        let mut config = CraftInfoConfig::new(0.55);
+        config.set_abort_button_match_def(match_def);
+
+        // 在主线程中获取截图（避免跨线程传递 Controller）
+        let screenshot = match WindowsController::from_window_title("FINAL FANTASY XIV") {
+            Ok(ctrl) => match ctrl.screencap() {
+                Ok(img) => img,
+                Err(e) => {
+                    self.auto_craft.craft_info_extracting = false;
+                    self.auto_craft.craft_info_status = format!("截图失败: {}", e);
+                    return;
+                }
+            },
+            Err(e) => {
+                self.auto_craft.craft_info_extracting = false;
+                self.auto_craft.craft_info_status = format!("无法找到游戏窗口: {}", e);
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.auto_craft.craft_info_receiver = Some(rx);
+
+        std::thread::spawn(move || {
+            let mut extractor = CraftInfoExtractor::new(config);
+            let result = extractor.extract(&screenshot);
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        });
     }
 }

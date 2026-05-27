@@ -5,6 +5,10 @@ data_playground
 .tomestone
 nul
 *.png
+*.rten
 
 **/tests/snapshots/**/*.diff.png
 **/tests/snapshots/**/*.new.png
+
+# ocrs 模型文件（体积较大，需手动下载）
+assets/models/

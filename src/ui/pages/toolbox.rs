@@ -40,6 +40,8 @@ pub struct AutoCraftUi {
     pub craft_info_status: String,
     pub craft_info_extracting: bool,
     pub craft_info_receiver: Option<std::sync::mpsc::Receiver<Result<CraftInfo, String>>>,
+    pub craft_info_auto_refresh: bool,
+    pub craft_info_last_refresh: f64,
 }
 
 impl Default for AutoCraftUi {
@@ -57,6 +59,8 @@ impl Default for AutoCraftUi {
             craft_info_status: "点击提取按钮获取制造信息".to_string(),
             craft_info_extracting: false,
             craft_info_receiver: None,
+            craft_info_auto_refresh: false,
+            craft_info_last_refresh: 0.0,
         }
     }
 }
@@ -95,7 +99,9 @@ impl App {
 
             self.poll_auto_craft_messages();
 
-            if matches!(self.auto_craft.state, AutoCraftState::Running(..)) {
+            if matches!(self.auto_craft.state, AutoCraftState::Running(..))
+                || self.auto_craft.craft_info_auto_refresh
+            {
                 ctx.request_repaint();
             }
         });
@@ -288,6 +294,15 @@ impl App {
     }
 
     fn show_craft_info_content(&mut self, ui: &mut egui::Ui) {
+        // 自动刷新逻辑
+        if self.auto_craft.craft_info_auto_refresh && !self.auto_craft.craft_info_extracting {
+            let now = ui.ctx().input(|i| i.time);
+            if now - self.auto_craft.craft_info_last_refresh >= 2.0 {
+                self.auto_craft.craft_info_last_refresh = now;
+                self.extract_craft_info();
+            }
+        }
+
         ui.group(|ui| {
             ui.label(egui::RichText::new("制造信息提取").strong().size(16.0));
             ui.label(
@@ -343,6 +358,12 @@ impl App {
                         self.extract_craft_info();
                     }
                 }
+
+                ui.add_space(8.0);
+                ui.checkbox(
+                    &mut self.auto_craft.craft_info_auto_refresh,
+                    "自动刷新 (2s)",
+                );
             });
 
             ui.add_space(4.0);
